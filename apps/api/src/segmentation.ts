@@ -123,7 +123,8 @@ export function splitIntoSegments(sourceText: string, documentId: string): Segme
         startOffset: span.startOffset,
         endOffset: span.endOffset,
         speaker: turn.speaker,
-        status: "queued"
+        status: "queued",
+        errorMessage: null
       });
       segmentIndex += 1;
     }

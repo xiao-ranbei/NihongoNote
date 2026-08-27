@@ -1,15 +1,34 @@
 import type { Segment, SegmentAnalysis } from "@nihongonote/core";
 
+import type { TokenBoundary } from "../tokenization.js";
+
+export type LlmProtocol = "openai" | "anthropic";
+
 export interface AnalysisRequest {
   segments: Segment[];
+  tokenBoundaries: TokenBoundary[];
   surroundingContext: string[];
   targetLevel: string;
   promptVersion: string;
 }
 
+export interface LlmUsage {
+  inputTokens: number | null;
+  outputTokens: number | null;
+  totalTokens: number | null;
+}
+
+export interface LlmAnalysisResult {
+  analyses: SegmentAnalysis[];
+  usage: LlmUsage | null;
+}
+
 export interface LlmProvider {
   readonly name: string;
-  analyze(request: AnalysisRequest): Promise<SegmentAnalysis[]>;
+  readonly protocol: LlmProtocol;
+  readonly model: string;
+  readonly configured: boolean;
+  analyze(request: AnalysisRequest): Promise<LlmAnalysisResult>;
 }
 
 export interface TtsRequest {
@@ -28,6 +47,7 @@ export interface TtsResult {
 
 export interface TtsProvider {
   readonly name: string;
+  readonly configured: boolean;
   synthesize(request: TtsRequest): Promise<TtsResult>;
 }
 
@@ -35,5 +55,22 @@ export class ProviderNotConfiguredError extends Error {
   public constructor(providerType: "LLM" | "TTS") {
     super(`${providerType} provider is not configured yet`);
     this.name = "ProviderNotConfiguredError";
+  }
+}
+
+export class ProviderConfigurationError extends Error {
+  public constructor(message: string) {
+    super(message);
+    this.name = "ProviderConfigurationError";
+  }
+}
+
+export class ProviderRequestError extends Error {
+  public readonly statusCode: number | null;
+
+  public constructor(message: string, statusCode: number | null = null) {
+    super(message);
+    this.name = "ProviderRequestError";
+    this.statusCode = statusCode;
   }
 }

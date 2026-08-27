@@ -4,12 +4,10 @@ import type { FastifyInstance } from "fastify";
 
 import { createApp } from "./app.js";
 import { appConfig } from "./config.js";
-import { createProviderRegistry } from "./providers/registry.js";
 
 let app: FastifyInstance | undefined;
 
 try {
-  createProviderRegistry(appConfig);
   app = await createApp(appConfig);
   await app.listen({
     host: appConfig.host,

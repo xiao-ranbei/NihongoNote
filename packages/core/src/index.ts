@@ -4,9 +4,11 @@ export {
   documentDetailSchema,
   documentStatusSchema,
   documentSummarySchema,
+  analysisProgressSchema,
   healthResponseSchema,
   segmentAnalysisSchema,
   segmentSchema,
+  segmentViewSchema,
   segmentStatusSchema,
   targetLevelSchema,
   tokenAnalysisSchema,
@@ -15,6 +17,7 @@ export {
 
 export type {
   ApiError,
+  AnalysisProgress,
   CreateDocumentInput,
   DocumentDetail,
   DocumentStatus,
@@ -23,6 +26,7 @@ export type {
   Segment,
   SegmentAnalysis,
   SegmentStatus,
+  SegmentView,
   TargetLevel,
   TokenAnalysis,
   UpdateDocumentInput

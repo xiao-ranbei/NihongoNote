@@ -51,7 +51,26 @@ pnpm dev
 - Web：<http://127.0.0.1:5173>
 - API 健康检查：<http://127.0.0.1:8787/api/health>
 
-当前 provider 默认为 `disabled`。这不是静默降级：在接入具体 LLM/TTS 前，相关能力会明确返回“尚未配置”的错误。
+当前 provider 默认为 `disabled`。DeepSeek OpenAI-compatible adapter 和分析 API 已经实现，但需要在本机配置 API key 才会发起云端请求；Anthropic-compatible adapter 和 TTS 尚未实现。
+
+启用 DeepSeek 文本分析：
+
+```powershell
+Copy-Item apps\api\.env.example apps\api\.env
+# 编辑 apps\api\.env，设置 LLM_PROVIDER=deepseek 和 LLM_API_KEY
+```
+
+关键配置：
+
+```env
+LLM_PROVIDER=deepseek
+LLM_PROTOCOL=openai
+LLM_BASE_URL=https://api.deepseek.com
+LLM_MODEL=deepseek-v4-pro
+LLM_API_KEY=your-api-key
+```
+
+保存文章后，点击“开始 AI 分析”。分析任务会按句段执行，结果通过 JSON schema 校验后保存；失败句段可以单独重试。
 
 ## 常用命令
 

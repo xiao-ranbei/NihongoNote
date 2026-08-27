@@ -1,7 +1,9 @@
 import {
+  analysisProgressSchema,
   documentDetailSchema,
   documentSummarySchema,
   healthResponseSchema,
+  type AnalysisProgress,
   type CreateDocumentInput,
   type DocumentDetail,
   type DocumentSummary,
@@ -56,5 +58,37 @@ export function createDocument(input: CreateDocumentInput): Promise<DocumentDeta
       body: JSON.stringify(input)
     },
     (payload) => documentDetailSchema.parse(payload)
+  );
+}
+
+export function startDocumentAnalysis(documentId: string): Promise<AnalysisProgress> {
+  return request(
+    `/api/documents/${encodeURIComponent(documentId)}/analyze`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}"
+    },
+    (payload) => analysisProgressSchema.parse(payload)
+  );
+}
+
+export function getAnalysisProgress(documentId: string): Promise<AnalysisProgress> {
+  return request(
+    `/api/documents/${encodeURIComponent(documentId)}/progress`,
+    { method: "GET" },
+    (payload) => analysisProgressSchema.parse(payload)
+  );
+}
+
+export function retrySegment(segmentId: string): Promise<AnalysisProgress> {
+  return request(
+    `/api/segments/${encodeURIComponent(segmentId)}/retry`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}"
+    },
+    (payload) => analysisProgressSchema.parse(payload)
   );
 }

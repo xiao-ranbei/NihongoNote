@@ -21,24 +21,6 @@ export const documentSummarySchema = z.object({
 });
 export type DocumentSummary = z.infer<typeof documentSummarySchema>;
 
-export const segmentSchema = z.object({
-  id: z.string().min(1),
-  documentId: z.string().min(1),
-  index: z.number().int().nonnegative(),
-  text: z.string().min(1),
-  startOffset: z.number().int().nonnegative(),
-  endOffset: z.number().int().positive(),
-  speaker: z.string().min(1).nullable(),
-  status: segmentStatusSchema
-});
-export type Segment = z.infer<typeof segmentSchema>;
-
-export const documentDetailSchema = documentSummarySchema.extend({
-  sourceText: z.string(),
-  segments: z.array(segmentSchema)
-});
-export type DocumentDetail = z.infer<typeof documentDetailSchema>;
-
 export const createDocumentInputSchema = z.object({
   title: z.string().trim().min(1).max(200).optional(),
   sourceText: z.string().min(1).max(2_000_000),
@@ -83,6 +65,41 @@ export const segmentAnalysisSchema = z.object({
   tokens: z.array(tokenAnalysisSchema)
 });
 export type SegmentAnalysis = z.infer<typeof segmentAnalysisSchema>;
+
+export const segmentSchema = z.object({
+  id: z.string().min(1),
+  documentId: z.string().min(1),
+  index: z.number().int().nonnegative(),
+  text: z.string().min(1),
+  startOffset: z.number().int().nonnegative(),
+  endOffset: z.number().int().positive(),
+  speaker: z.string().min(1).nullable(),
+  status: segmentStatusSchema,
+  errorMessage: z.string().min(1).nullable()
+});
+export type Segment = z.infer<typeof segmentSchema>;
+
+export const segmentViewSchema = segmentSchema.extend({
+  analysis: segmentAnalysisSchema.nullable()
+});
+export type SegmentView = z.infer<typeof segmentViewSchema>;
+
+export const documentDetailSchema = documentSummarySchema.extend({
+  sourceText: z.string(),
+  segments: z.array(segmentViewSchema)
+});
+export type DocumentDetail = z.infer<typeof documentDetailSchema>;
+
+export const analysisProgressSchema = z.object({
+  documentId: z.string().min(1),
+  status: documentStatusSchema,
+  totalSegments: z.number().int().nonnegative(),
+  queuedSegments: z.number().int().nonnegative(),
+  processingSegments: z.number().int().nonnegative(),
+  completedSegments: z.number().int().nonnegative(),
+  failedSegments: z.number().int().nonnegative()
+});
+export type AnalysisProgress = z.infer<typeof analysisProgressSchema>;
 
 export const healthResponseSchema = z.object({
   status: z.literal("ok"),

@@ -94,6 +94,30 @@ class SqlJsDatabaseAdapter implements AppDatabase {
   }
 }
 
+function hasColumn(database: SqlJsDatabase, tableName: string, columnName: string): boolean {
+  const statement = database.prepare(`PRAGMA table_info(${tableName})`);
+  try {
+    while (statement.step()) {
+      const row = statement.getAsObject() as { name?: unknown };
+      if (row.name === columnName) {
+        return true;
+      }
+    }
+    return false;
+  } finally {
+    statement.free();
+  }
+}
+
+function migrateDatabase(database: SqlJsDatabase): void {
+  if (!hasColumn(database, "segments", "error_message")) {
+    database.run("ALTER TABLE segments ADD COLUMN error_message TEXT");
+  }
+  if (!hasColumn(database, "segment_analyses", "usage_json")) {
+    database.run("ALTER TABLE segment_analyses ADD COLUMN usage_json TEXT NOT NULL DEFAULT 'null'");
+  }
+}
+
 export async function createDatabase(databaseFile: string): Promise<AppDatabase> {
   fs.mkdirSync(path.dirname(databaseFile), { recursive: true });
 
@@ -107,6 +131,7 @@ export async function createDatabase(databaseFile: string): Promise<AppDatabase>
 
   database.run("PRAGMA foreign_keys = ON");
   database.exec(databaseSchema);
+  migrateDatabase(database);
 
   fs.writeFileSync(databaseFile, Buffer.from(database.export()));
   return new SqlJsDatabaseAdapter(database, databaseFile);

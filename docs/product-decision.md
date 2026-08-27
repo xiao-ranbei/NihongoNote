@@ -1,7 +1,7 @@
 # 产品形态决策
 
-**状态**：需求访谈版决策  
-**日期**：2026-08-26  
+**状态**：需求访谈版决策（已更新供应商策略）
+**日期**：2026-08-27
 **目标用户**：个人日语学习者（自用）
 
 ## 一、结论
@@ -18,7 +18,64 @@
 
 这些能力需要浏览器 DOM、持久化存储、麦克风权限和可控的任务状态。Agent/skill 可以很好地提供分析能力，但不能自然地替代这层产品界面。
 
-## 二、方案比较
+## 二、LLM 供应商和协议决策
+
+### 决策
+
+第一阶段选择 **DeepSeek 作为首个 LLM 候选**，先实现它的 **OpenAI-compatible API**。Anthropic-compatible API 保留为第二个适配器，不作为 P1 的阻塞条件。
+
+这不是把产品永久绑定到 DeepSeek，而是选择一条最短的验证路径：
+
+- DeepSeek 官方同时提供 OpenAI 和 Anthropic 兼容入口；
+- OpenAI-compatible 方式有 JSON Output，适合本项目的结构化解析；
+- 使用一个通用的 OpenAI-compatible adapter，可以复用到 OpenAI 和其他兼容服务；
+- 后端内部仍使用 NihongoNote 自己的 `LlmProvider` 和 JSON schema，供应商协议不泄漏到前端；
+- 等真实样本验证日语解析质量后，再决定是否需要第二种协议或更换模型。
+
+### DeepSeek 官方入口
+
+| 协议 | Base URL | 主要请求形式 | 本项目计划 |
+| --- | --- | --- | --- |
+| OpenAI-compatible | `https://api.deepseek.com` | `/chat/completions` | P1 首先实现 |
+| Anthropic-compatible | `https://api.deepseek.com/anthropic` | `/messages` | 后续适配器 |
+
+DeepSeek 官方文档：
+
+- [OpenAI API 兼容说明](https://api-docs.deepseek.com/guides/openai_api)
+- [Anthropic API 兼容说明](https://api-docs.deepseek.com/guides/anthropic_api)
+- [JSON Output 说明](https://api-docs.deepseek.com/guides/json_mode)
+- [模型和价格](https://api-docs.deepseek.com/quick_start/pricing/)
+
+“兼容”不表示所有字段完全等价。Anthropic 入口会忽略或不支持部分 Anthropic 专有字段，因此第一版只依赖基础文本消息、系统提示、模型、token 上限、温度、流式输出和工具/结构化结果所需的最小字段。
+
+### 结构化输出约束
+
+DeepSeek JSON Output 需要：
+
+- 请求设置 `response_format: { "type": "json_object" }`；
+- system 或 user prompt 中明确要求输出 JSON；
+- 提供期望 JSON 结构示例；
+- 设置足够的 `max_tokens`；
+- 处理偶发的空内容和因长度截断导致的不完整 JSON。
+
+JSON Output 只解决“格式是 JSON”的问题，不保证助词、语气或对话关系解释正确。因此仍必须执行本地 schema 校验、原文 ID 校验和不确定性标记。
+
+### 当前实现状态
+
+DeepSeek OpenAI-compatible adapter 和分析 API 已经落地：
+
+- [LLM Provider 接口](../apps/api/src/providers/types.ts)提供业务层统一的 `analyze()`；
+- [OpenAI-compatible adapter](../apps/api/src/providers/openai-compatible.ts)负责请求、JSON Output、响应解析和错误分类；
+- [Provider Registry](../apps/api/src/providers/registry.ts)支持 `deepseek`、`openai` 和 `openai-compatible`；
+- [API 配置](../apps/api/src/config.ts)支持 API key、base URL、协议、模型、温度、token 上限和超时；
+- [分析服务](../apps/api/src/services/analysis-service.ts)负责句段任务、上下文、原文 ID/offset 校验、保存和重试；
+- [分析路由](../apps/api/src/routes/analysis.ts)提供启动、进度和失败句段重试。
+
+默认仍是 `LLM_PROVIDER=disabled`。启用 DeepSeek 时，需要在 `apps/api/.env` 设置 `LLM_PROVIDER=deepseek` 和 `LLM_API_KEY`；没有 key 时 API 会明确返回未配置错误。Anthropic-compatible adapter 仍是后续工作。
+
+DeepSeek 在本项目中只负责 P1 文本分析；P2 日语朗读仍由独立的 TTS provider 负责。
+
+## 三、方案比较
 
 | 方案 | 交互适配 | 首个可用版本 | 持续成本 | 完善程度上限 | 适合用途 |
 | --- | --- | --- | --- | --- | --- |
@@ -29,7 +86,7 @@
 
 周期是假设由一名熟悉 TypeScript 的开发者、借助 AI 辅助完成的估算，不包含反复试验模型提示词的时间。
 
-## 三、为什么不是先做 Agent/skill
+## 四、为什么不是先做 Agent/skill
 
 ### Agent 的优势
 
@@ -55,7 +112,7 @@ skill 应作为**可复用的分析协议**，而不是主产品：
 
 这样既保留 skill 的复用价值，也不牺牲 Web 阅读器的核心体验。
 
-## 四、成本策略
+## 五、成本策略
 
 ### 固定成本
 
@@ -82,14 +139,15 @@ skill 应作为**可复用的分析协议**，而不是主产品：
 
 ### 供应商选择
 
-第一版不绑定单一供应商。实现时应对至少一个 LLM 和一个 TTS 做真实样本 A/B 测试：
+第一版不做永久性的单一供应商绑定，但采用“DeepSeek 先验证、adapter 保持可替换”的策略。实现时仍应对至少一个 LLM 和一个 TTS 做真实样本 A/B 测试：
 
-- LLM：选择支持结构化 JSON 输出、长上下文和日语能力稳定的服务。
+- LLM：先用 DeepSeek OpenAI-compatible API 验证结构化 JSON、长上下文和日语能力；必要时再对比其他 provider。
 - TTS：优先支持日语标准语、SSML 停顿和可扩展音色的服务；Azure Speech、Google Cloud Text-to-Speech 等可作为候选。
 
 实施前重新核对官方页面：
 
 - [OpenAI API pricing](https://platform.openai.com/docs/pricing)
+- [DeepSeek API pricing](https://api-docs.deepseek.com/quick_start/pricing/)
 - [Google Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing)
 - [Anthropic API pricing](https://www.anthropic.com/pricing#api)
 - [Azure Speech pricing](https://azure.microsoft.com/pricing/details/cognitive-services/speech-services/)
@@ -97,7 +155,7 @@ skill 应作为**可复用的分析协议**，而不是主产品：
 
 价格页面会变化，因此本文不把某个时点的单价当作长期承诺。
 
-## 五、完善程度路线
+## 六、完善程度路线
 
 ### 第一阶段：可长期自用
 
@@ -119,18 +177,20 @@ skill 应作为**可复用的分析协议**，而不是主产品：
 - Agent/skill 快捷调用；
 - 多设备同步或公网部署。
 
-## 六、主要风险和缓解方式
+## 七、主要风险和缓解方式
 
 | 风险 | 影响 | 缓解 |
 | --- | --- | --- |
 | 模型把助词或语气解释错 | 学习者形成错误理解 | 使用结构化输出、保留原文证据、标记不确定性，并允许用户反馈 |
 | 长文超出上下文或调用过多 | 成本和等待时间上升 | 句子分段、上下文窗口、缓存、断点续跑 |
+| 兼容 API 的字段行为不完全一致 | 换供应商或协议时出现隐性错误 | 只使用适配器声明的最小字段；对供应商响应做显式转换和 schema 校验 |
+| JSON 输出为空或被截断 | 分析任务失败或保存半截结果 | 检查 finish reason 和空内容；失败段落可重试，不能写入完成状态 |
 | 自动分词不准确 | 词语悬浮范围错误 | 采用日语形态素分析器，允许按句子退化显示 |
 | TTS 的“语气”不稳定 | 朗读不符合预期 | 第一版只承诺自然标准语和停顿；多角色作为后续能力 |
 | 浏览器录音格式不兼容 | 无法回听或导出 | 保存 MIME 类型和时长，优先使用浏览器原生 MediaRecorder |
 | API 密钥泄漏 | 费用和账号风险 | 密钥只读本机服务端环境变量，前端永不接触 |
 
-## 七、不可妥协的取舍
+## 八、不可妥协的取舍
 
 1. 优先保证解释正确、可追溯和可复习，而不是一次生成所有花哨效果。
 2. 保持前端与 AI/TTS 解耦，未来更换供应商不需要重做阅读器。

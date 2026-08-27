@@ -18,6 +18,7 @@ export const databaseSchema = `
     end_offset INTEGER NOT NULL,
     speaker TEXT,
     status TEXT NOT NULL CHECK (status IN ('queued', 'processing', 'completed', 'failed')),
+    error_message TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     UNIQUE (document_id, segment_index)
@@ -29,6 +30,7 @@ export const databaseSchema = `
     model TEXT NOT NULL,
     prompt_version TEXT NOT NULL,
     result_json TEXT NOT NULL,
+    usage_json TEXT NOT NULL DEFAULT 'null',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );

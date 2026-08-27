@@ -1,7 +1,7 @@
 # 产品需求说明
 
-**版本**：0.1  
-**日期**：2026-08-26  
+**版本**：0.2
+**日期**：2026-08-27
 **范围**：个人本地 Web 应用
 
 ## 一、已确认的需求
@@ -21,10 +21,46 @@
 | 跟读 | 第一版录音、保存、回放，不承诺自动发音评分 |
 | 数据 | 保存文章、解析、音频和录音，并支持历史搜索 |
 | 云服务 | 可以发送到第三方模型/TTS，优先质量和开发速度 |
+| 首个 LLM 候选 | DeepSeek |
+| 首个 LLM 协议 | DeepSeek OpenAI-compatible API |
+| 后续 LLM 协议 | Anthropic-compatible API，作为可插拔的第二适配器 |
 | 账号 | 第一版没有 API 账号，按推荐方案接入 |
 | 时间 | 没有硬性期限，优先方案扎实和可长期使用 |
 
-## 二、产品目标
+## 二、LLM 服务接入需求
+
+### 已确认的接入策略
+
+1. P1 首先接入 DeepSeek 的 OpenAI-compatible API。
+2. 内部统一使用 NihongoNote 自己的 `LlmProvider` 接口和版本化 JSON schema。
+3. Anthropic-compatible API 需要保留接入能力，但不阻塞第一条可用分析链路。
+4. 前端不直接请求任何 LLM 服务；API key、base URL、模型和协议只由本机 API 管理。
+5. DeepSeek 只负责文本分析；朗读和录音使用独立的 TTS/浏览器能力。
+
+DeepSeek 官方入口：
+
+- OpenAI-compatible：`https://api.deepseek.com`
+- Anthropic-compatible：`https://api.deepseek.com/anthropic`
+
+具体模型名称、限流规则和价格在实施时以[官方文档](https://api-docs.deepseek.com/)为准。
+
+### LLM 功能需求
+
+| ID | 需求 | 验收标准 |
+| --- | --- | --- |
+| LLM-001 | 配置 LLM provider | 可在本机服务端配置 provider、protocol、base URL、model 和 API key；密钥不出现在前端 |
+| LLM-002 | DeepSeek 首条链路 | 使用 DeepSeek OpenAI-compatible API 完成一段真实日语材料的分析 |
+| LLM-003 | 结构化 JSON | 请求启用 JSON 输出，结果通过本地 schema 校验后才可保存 |
+| LLM-004 | 原文绑定 | 模型返回的 segment/token ID 必须来自服务端输入，不能由前端用字符串搜索猜测 |
+| LLM-005 | 空结果和截断处理 | 空内容、非法 JSON 或长度截断必须标记为失败并可重试，不得显示为完成 |
+| LLM-006 | 协议可替换 | 增加 Anthropic-compatible adapter 时，不修改前端阅读器和持久化分析 schema |
+| LLM-007 | 调用元数据 | 保存 provider、model、protocol、promptVersion、输入/输出用量、缓存命中和错误分类 |
+
+DeepSeek JSON Output 需要在 prompt 中明确要求 JSON，并设置合理的 `max_tokens`；即使返回合法 JSON，也必须继续校验业务字段和原文 ID。
+
+当前实现已覆盖 LLM-001、LLM-003、LLM-004、LLM-005 的基础链路，以及 DeepSeek OpenAI-compatible adapter；LLM-002 仍需使用真实 DeepSeek API key 和评估样本完成质量/费用验收。LLM-006（Anthropic-compatible adapter）属于后续阶段。
+
+## 三、产品目标
 
 ### 目标
 
@@ -41,7 +77,7 @@
 - 以 Agent 对话窗口替代文章阅读器；
 - 保证模型解释等同于语言学教材或人工教师结论。
 
-## 三、核心用户流程
+## 四、核心用户流程
 
 1. 打开本机 Web 应用。
 2. 粘贴文章或对话，选择标题、学习难度和可选的角色标记。
@@ -55,7 +91,7 @@
 6. 点击录音，完成跟读后保存并回听。
 7. 从历史列表搜索文章，继续复习。
 
-## 四、功能需求
+## 五、功能需求
 
 ### 4.1 文档和文章阅读
 
@@ -102,6 +138,7 @@
 - 对存在多种合理解释的内容明确标记不确定性。
 
 模型输出必须包含原文句子 ID，前端不得依赖模型返回的字符串位置自行猜测绑定关系。
+token 的边界、ID、surface 和字符偏移由本机服务生成并传给模型；模型返回的 token 必须逐项匹配本地边界。
 
 ### 4.4 对话角色
 
@@ -131,7 +168,7 @@
 - 保存分析提示词/解析协议版本，避免模型升级后无法追踪结果来源。
 - 支持导出原文、解析 JSON 和录音文件，作为后续备份能力；若首版时间有限，导出可排在历史搜索之后。
 
-## 五、建议的数据结构
+## 六、建议的数据结构
 
 ```text
 Document
@@ -157,7 +194,7 @@ Recording
 
 `start` 和 `end` 应由服务端分词结果生成，并以稳定的 Unicode 字符偏移保存。前端不能只依赖视觉上的字符串搜索，以免重复词语绑定到错误位置。
 
-## 六、非功能需求
+## 七、非功能需求
 
 ### 可靠性
 
@@ -177,10 +214,12 @@ Recording
 ### 可维护性
 
 - AI、TTS、分词器都通过适配器隔离。
+- 当前 token 边界可使用 Node `Intl.Segmenter`，后续可替换为更精细的日语形态素分析器而不改变前端绑定协议。
+- LLM 协议通过 adapter 隔离；业务层不得依赖 OpenAI 或 Anthropic 的响应对象。
 - 分析输出使用版本化 JSON schema。
 - 前端渲染层不直接拼接模型 Markdown 作为结构化数据源。
 
-## 七、验收样例
+## 八、验收样例
 
 准备至少三类真实材料：
 
@@ -197,3 +236,5 @@ Recording
 - 音频能逐句播放；
 - 录音保存后重新打开文章仍可回听；
 - API 出错时显示原因，而不是伪装成“分析完成”。
+- 使用 DeepSeek OpenAI-compatible API 时，结构化结果能够通过 schema 校验并绑定到正确句段。
+- 将 provider 配置为未实现的协议时，服务启动或请求失败必须给出明确提示，不能静默切换到其他模型。

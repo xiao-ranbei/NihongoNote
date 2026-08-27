@@ -1,6 +1,6 @@
 # 技术架构方案
 
-**状态**：第一版推荐方案  
+**状态**：第一版推荐方案（已确定首个 LLM 接入路径）
 **适用范围**：单用户、本机 Web 应用、允许使用云端 AI/TTS
 
 ## 一、总体架构
@@ -29,13 +29,13 @@ flowchart LR
 - 数据库：SQLite，通过 `sql.js`/WASM 运行在本机服务中，避免要求用户安装 C++ 原生编译工具；
 - 文件：项目 `data/` 下的音频和录音目录；
 - 校验：运行时 schema 校验库，例如 Zod；
-- 分词：服务端日语形态素分析器，例如 kuromoji.js；封装成可替换接口；
+- 分词：服务端确定性日语 token 边界；当前使用 Node `Intl.Segmenter` 的日语 word segmentation，后续可替换为 kuromoji.js 等形态素分析器；
 - 录音：浏览器 `MediaRecorder`；
 - 包管理：pnpm workspace。
 
 这套栈适合本地部署的原因是组件少、运行成本低、API 密钥不经过浏览器，也保留将来拆分或公网部署的空间。当前选择 `sql.js` 是为了让 Windows 开发环境不依赖 `better-sqlite3` 的原生模块编译；数据库在内存中运行，在写入后导出回本地 SQLite 文件。
 
-当前骨架已经提供文章保存、SQLite 初始化、健康检查、基础分句和前端阅读预览；LLM、TTS、分词器的具体实现仍保持为明确的适配器边界。
+当前代码已经提供文章保存、SQLite 初始化、健康检查、基础分句、确定性 token 边界、前端阅读预览、DeepSeek OpenAI-compatible adapter 和句段分析任务；更细的日语形态素字段、TTS 及 Anthropic-compatible adapter 仍保持为后续适配器边界。
 
 ## 三、模块边界
 
@@ -98,7 +98,7 @@ GET    /api/search?q=...
 
 1. **输入规范化**：保留原文、换行和标点，生成文档版本。
 2. **句子切分**：按日语标点、换行和对话标记生成稳定的 segment ID。
-3. **形态素分析**：取得 token 的表面形、原形、读音、词性和字符偏移。
+3. **本地 token 边界**：使用确定性日语分词取得 surface 和字符偏移；模型只补充原形、读音、词性、词义和语法字段。
 4. **分块**：按段落和 token/字符上限组合请求；每块携带有限的前后文。
 5. **结构化生成**：要求模型只返回版本化 JSON，不让前端依赖 Markdown。
 6. **schema 校验**：校验 segment ID、token 范围和必填字段；失败则标记为失败并显示原因。
@@ -140,14 +140,70 @@ GET    /api/search?q=...
 analyze(segments, context, targetLevel, promptVersion) -> ValidatedAnalysis
 ```
 
+第一阶段实现两个层次：
+
+```text
+LlmProvider                       业务层统一接口
+├── OpenAiCompatibleLlmProvider    P1 首先实现，连接 DeepSeek/OpenAI/其他兼容服务
+└── AnthropicMessagesLlmProvider   后续实现，连接 Anthropic-compatible 服务
+```
+
+provider 配置建议抽象为：
+
+```text
+provider, protocol, baseUrl, apiKey, model,
+temperature, maxTokens, timeoutMs
+```
+
+首个 DeepSeek 配置的协议层示例：
+
+```text
+provider: deepseek
+protocol: openai
+baseUrl: https://api.deepseek.com
+endpoint: /chat/completions
+```
+
+后续 Anthropic-compatible 配置：
+
+```text
+provider: deepseek
+protocol: anthropic
+baseUrl: https://api.deepseek.com/anthropic
+endpoint: /messages
+```
+
+第一版建议使用本机服务端原生 `fetch` 发送请求，并在协议 adapter 内完成请求/响应转换，而不是让业务层直接依赖某个 SDK 的响应类型。这样可以同时支持 DeepSeek、OpenAI、Anthropic-compatible 服务和其他兼容端点。
+
 适配器负责：
 
 - 供应商认证；
+- 根据协议序列化请求并解析响应；
 - 模型和温度等参数；
 - 结构化输出配置；
 - 限流、超时和错误分类；
 - token 使用量记录；
 - 将供应商错误转为本机 API 的可读错误。
+
+#### OpenAI-compatible 适配器（已实现）
+
+P1 使用 `/chat/completions`，请求至少包含 system/user messages、model、`max_tokens` 和 `response_format: { type: "json_object" }`。system 或 user prompt 必须明确包含 JSON 输出要求和示例。
+
+适配器必须显式处理：
+
+- HTTP 非 2xx；
+- `choices[0].message.content` 缺失或为空；
+- `finish_reason` 表示长度截断；
+- 返回内容不是合法 JSON；
+- JSON 合法但不符合 NihongoNote schema；
+- provider 返回的 segment/token ID 不属于本次请求；
+- provider 返回的 token 边界与本地 token 边界不一致。
+
+DeepSeek 官方 JSON Output 说明还提示可能出现空内容或截断，因此不能把 HTTP 成功直接当作分析成功。
+
+#### Anthropic-compatible 适配器（后续实现）
+
+后续使用 `/messages`，将 system、messages、max tokens 和文本 content 转换为内部请求。只依赖协议兼容层公开支持的基础字段，不依赖某家服务的缓存、文档或特殊 thinking 字段。解析后统一转为内部 `SegmentAnalysis[]`，前端和数据库不感知协议差异。
 
 前端只知道“分析成功/进行中/失败”，不应依赖某个供应商的响应格式。
 
@@ -237,8 +293,9 @@ TTS 缓存还应包含 voice、prosody 和格式，否则切换语速/音色时�
 
 ## 十、待实现时确认的技术决策
 
-1. LLM 候选供应商的真实日语样本质量和结构化输出稳定性；
-2. TTS 候选供应商的日语音色、SSML 和费用；
-3. 日语形态素分析器在助词、口语缩约和重复词上的偏移准确率；
-4. SQLite 驱动在目标 Windows 环境的安装体验；
-5. 浏览器录音格式在目标浏览器中的兼容性。
+1. DeepSeek OpenAI-compatible API 在两篇商务材料和新增普通文章上的真实解析质量、JSON 稳定性、延迟和费用；
+2. DeepSeek 的具体模型名称、限流和价格，实施时以官方文档/控制台为准；
+3. Anthropic-compatible adapter 是否在 P1 后有实际价值，以及需要支持的最小字段集合；
+4. TTS 候选供应商的日语音色、SSML 和费用；
+5. 日语形态素分析器在助词、口语缩约和重复词上的偏移准确率；
+6. 浏览器录音格式在目标浏览器中的兼容性。

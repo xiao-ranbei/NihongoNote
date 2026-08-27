@@ -9,6 +9,10 @@
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
+    "lib": [
+      "ES2022",
+      "ES2022.Intl"
+    ],
     "types": [
       "node"
     ]
