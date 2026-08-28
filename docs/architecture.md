@@ -262,7 +262,14 @@ endpoint: /messages
 
 #### OpenAI-compatible 适配器（已实现）
 
-P1 使用 `/chat/completions`，请求至少包含 system/user messages、model、`max_tokens` 和 `response_format: { type: "json_object" }`。system 或 user prompt 必须明确包含 JSON 输出要求和示例。
+P1 使用官方 OpenAI SDK 的 `chat.completions.create()`，通过 `baseURL: https://api.deepseek.com` 访问
+`/chat/completions`。请求至少包含 system/user messages、model、`max_tokens` 和
+`response_format: { type: "json_object" }`；DeepSeek 推理配置还包括 `thinking` 和
+`reasoning_effort`。system 或 user prompt 必须明确包含 JSON 输出要求和示例。
+
+当前默认的 DeepSeek 配置是 `deepseek-v4-flash`、`thinking.type=enabled` 和
+`reasoning_effort=high`；具体模型和参数通过环境变量覆盖。OpenAI SDK 的自动重试显式关闭，
+避免一次分析因 SDK 重试产生重复请求、重复费用或额外等待。
 
 适配器必须显式处理：
 
@@ -275,7 +282,12 @@ P1 使用 `/chat/completions`，请求至少包含 system/user messages、model�
 - provider 返回的 token 边界与本地 token 边界不一致。
 
 DeepSeek 官方 JSON Output 说明还提示可能出现空内容或截断，因此不能把 HTTP 成功直接当作分析成功。
-当前模板将 `LLM_MAX_TOKENS` 默认设为 `12000`，长句仍应根据实际响应和 provider 上限调整；API 中途重启后，启动恢复逻辑会把 `processing` 句段重新置为 `queued`，避免任务永久卡住。
+当前模板将 `LLM_MAX_TOKENS` 默认设为 `32000`，长句仍应根据实际响应和 provider 上限调整；API 中途重启后，启动恢复逻辑会把 `processing` 句段重新置为 `queued`，避免任务永久卡住。
+
+分析服务当前按句段串行调用 provider，以便独立保存成功结果和重试失败句段；因此长对话的总耗时约为
+各句段请求耗时之和。启用 `LLM_DEBUG_LOGGING=true` 后，服务会把每次调用的实际请求体、响应内容、
+耗时和错误追加到默认数据目录的 `llm-debug.jsonl`，但不写入 Authorization header 或 API key。
+调试日志会包含原文，排查完成后应关闭开关并删除日志。
 
 #### Anthropic-compatible 适配器（后续实现）
 

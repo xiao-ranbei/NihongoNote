@@ -66,12 +66,26 @@ Copy-Item apps\api\.env.example apps\api\.env
 LLM_PROVIDER=deepseek
 LLM_PROTOCOL=openai
 LLM_BASE_URL=https://api.deepseek.com
-LLM_MODEL=deepseek-v4-pro
+LLM_MODEL=deepseek-v4-flash
+LLM_THINKING_TYPE=enabled
+LLM_REASONING_EFFORT=high
+LLM_DEBUG_LOGGING=false
+LLM_DEBUG_LOG_FILE=./data/llm-debug.jsonl
 LLM_API_KEY=your-api-key
 ```
 
 保存文章后，点击“开始 AI 分析”。分析任务会按句段执行，结果通过 JSON schema 校验后保存；失败句段可以单独重试，取消时会中止当前云端请求并停止后续句段。
-包含完整 token 解释的长句可能需要较高的 `LLM_MAX_TOKENS`；模板默认使用 `12000`，可根据实际响应长度调整。
+推理型模型可能需要更长等待时间；模板默认 `LLM_TIMEOUT_MS=300000`。`thinking` 和 `reasoning_effort` 只影响模型推理过程，不改变本地 token 边界或结果校验。
+长句的结构化解析可能同时包含推理和 JSON 内容，模板将 `LLM_MAX_TOKENS` 设为 `32000`；如果供应商或账户限制更低，请按实际限制调小。
+
+开发者排查请求时，可以在本机 `.env` 临时启用：
+
+```env
+LLM_DEBUG_LOGGING=true
+LLM_DEBUG_LOG_FILE=./data/llm-debug.jsonl
+```
+
+每次调用会追加一行 JSON，包含实际发送的 endpoint、model、messages、thinking、reasoning_effort、response_format、token 边界、耗时和响应内容；Authorization header 和 API key 永远不会写入。由于 messages 会包含原文，调试完成后请关闭该选项或删除日志文件。
 
 ## 常用命令
 

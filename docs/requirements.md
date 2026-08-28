@@ -361,6 +361,8 @@ AudioAsset
 - 服务只监听本机地址，第一版不暴露公网。
 - LLM/TTS API 密钥只存在服务端环境变量，不发送到浏览器。
 - 默认日志不记录完整文章或 API 密钥。
+- 开发者调试日志必须显式开启；开启后可以记录发送给 provider 的 messages 和响应以排查协议问题，
+  但 Authorization header 和 API key 永远不得写入，调试结束后应关闭并删除日志。
 
 ### 可维护性
 
