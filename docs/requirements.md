@@ -160,7 +160,7 @@ DeepSeek 官方入口：
 
 DeepSeek JSON Output 需要在 prompt 中明确要求 JSON，并设置合理的 `max_tokens`；即使返回合法 JSON，也必须继续校验业务字段和原文 ID。
 
-当前实现已覆盖 LLM-001、LLM-003、LLM-004、LLM-005 的基础链路，以及 DeepSeek OpenAI-compatible adapter；LLM-002 仍需使用真实 DeepSeek API key 和评估样本完成质量/费用验收。LLM-006（Anthropic-compatible adapter）属于后续阶段。API 重启恢复逻辑会将中断的 `processing` 句段重新置为可重试状态。
+当前实现已覆盖 LLM-001、LLM-003、LLM-004、LLM-005 的基础链路，以及使用官方 OpenAI SDK 的 DeepSeek OpenAI-compatible adapter；`deepseek-v4-flash`、`thinking`、`reasoning_effort`、JSONL 调试日志和请求取消均由服务端配置。已用真实 key 完成一段商务发言（3 个 segment）的连通性和 schema 验证，但 LLM-002 仍需使用完整固定评估样本完成质量/费用验收。LLM-006（Anthropic-compatible adapter）属于后续阶段。API 重启恢复逻辑会将中断的 `processing` 句段重新置为可重试状态。
 
 ## 三、产品目标
 

@@ -21,10 +21,11 @@
 
 ### 工作项
 
-基础骨架、DeepSeek OpenAI-compatible adapter、JSON schema 校验、句段分析任务、进度和失败句段重试已经实现；以下工作仍需真实供应商 key 验证。
+基础骨架、基于官方 OpenAI SDK 的 DeepSeek OpenAI-compatible adapter、JSON schema 校验、句段分析任务、进度、取消和失败句段重试已经实现；真实供应商 key 的固定样本验证仍需继续。
 
 - 收集至少三篇真实材料；
-- 以 DeepSeek OpenAI-compatible API 作为首个 LLM 候选，使用真实材料做质量/费用验证；
+- 以 `deepseek-v4-flash`、`thinking` 和 `reasoning_effort` 配置验证 DeepSeek OpenAI-compatible API，使用真实材料做质量/费用验证；
+- 使用 `LLM_DEBUG_LOGGING` 检查实际请求 messages、推理参数、响应耗时和失败原因；
 - 记录 provider、protocol、model、promptVersion、用量和错误分类。
 
 ### 不做
@@ -61,11 +62,11 @@ P1 MVP 已完成以下闭环：
 - 首版标题、角色和解析字段修正，并保留 AI 原始版本；
 - 学习库折叠状态、搜索和分析状态筛选。
 
-仍未完成的是真实 DeepSeek key 质量/费用验收；完整范围叠加、四层点击、区块/分句/范围编辑和等级解释层切换按下方 P1 后续增强推进。
+已完成一段真实 DeepSeek 商务发言的连通性和 schema 验证（3 个句子均成功）；完整固定样本的质量/费用验收仍未完成。完整范围叠加、四层点击、区块/分句/范围编辑和等级解释层切换按下方 P1 后续增强推进。
 
 ### P1 MVP 交付顺序
 
-1. 接入并验证 DeepSeek OpenAI-compatible adapter 和分析 API（基础链路已完成，待真实 key 验证）；
+1. 接入并验证 DeepSeek OpenAI-compatible adapter 和分析 API（已完成单段真实 key 验证，待完整样本回归）；
 2. 粘贴、编辑和保存文章；用户手动选择内容类型，自动识别只生成建议；
 3. 按文档规则完成日语句子切分、说话人识别和稳定的 UTF-16 偏移；
 4. 在连续阅读框中保留原文、换行、标点和未解析区块，并实现句子层和 token 层定位；

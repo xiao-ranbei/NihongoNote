@@ -34,7 +34,7 @@ flowchart LR
 
 这套栈适合本地部署的原因是组件少、运行成本低、API 密钥不经过浏览器，也保留将来拆分或公网部署的空间。当前选择 `sql.js` 是为了让 Windows 开发环境不依赖 `better-sqlite3` 的原生模块编译；数据库在内存中运行，在写入后导出回本地 SQLite 文件。
 
-当前代码已经提供文章保存、SQLite 初始化、健康检查、基础分句、确定性 token 边界、前端阅读预览、DeepSeek OpenAI-compatible adapter 和句段分析任务；TTS provider 当前保持 disabled，更细的日语形态素字段及 Anthropic-compatible adapter 仍保持为后续适配器边界。P1 先以 token + 句子两层形成可验证闭环，完整范围标注和等级解释分层在不破坏稳定 ID 的前提下逐步加入。
+当前代码已经提供文章保存、SQLite 初始化、健康检查、基础分句、确定性 token 边界、前端阅读预览、基于官方 OpenAI SDK 的 DeepSeek OpenAI-compatible adapter 和句段分析任务；TTS provider 当前保持 disabled，更细的日语形态素字段及 Anthropic-compatible adapter 仍保持为后续适配器边界。P1 先以 token + 句子两层形成可验证闭环，完整范围标注和等级解释分层在不破坏稳定 ID 的前提下逐步加入。
 
 ## 三、模块边界
 
@@ -248,7 +248,7 @@ baseUrl: https://api.deepseek.com/anthropic
 endpoint: /messages
 ```
 
-第一版建议使用本机服务端原生 `fetch` 发送请求，并在协议 adapter 内完成请求/响应转换，而不是让业务层直接依赖某个 SDK 的响应类型。这样可以同时支持 DeepSeek、OpenAI、Anthropic-compatible 服务和其他兼容端点。
+第一版使用本机服务端的官方 OpenAI SDK 发送 OpenAI-compatible 请求，并在协议 adapter 内完成请求/响应转换，而不是让业务层直接依赖某家服务的响应对象。这样可以同时支持 DeepSeek、OpenAI、其他 OpenAI-compatible 服务和后续 Anthropic-compatible 端点。
 
 适配器负责：
 
@@ -288,6 +288,11 @@ DeepSeek 官方 JSON Output 说明还提示可能出现空内容或截断，因�
 各句段请求耗时之和。启用 `LLM_DEBUG_LOGGING=true` 后，服务会把每次调用的实际请求体、响应内容、
 耗时和错误追加到默认数据目录的 `llm-debug.jsonl`，但不写入 Authorization header 或 API key。
 调试日志会包含原文，排查完成后应关闭开关并删除日志。
+
+2026-08-28 已用真实 DeepSeek key 验证一段商务发言：原文包含三个句末标点，因此拆成
+3 个 segment；`deepseek-v4-flash`、`thinking=enabled`、`reasoning_effort=high` 下 3/3
+返回 `finish_reason=stop` 并通过本地 schema 校验。三次串行调用耗时约 76.7 秒、64.3 秒和
+166.1 秒；这说明当前延迟主要来自推理型模型的生成时间与逐句串行策略，而不是前端等待或重试。
 
 #### Anthropic-compatible 适配器（后续实现）
 
