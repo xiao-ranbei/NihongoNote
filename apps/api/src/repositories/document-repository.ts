@@ -310,6 +310,28 @@ export class DocumentRepository {
     `, [new Date().toISOString(), documentId]) > 0;
   }
 
+  public recoverInterruptedAnalyses(): void {
+    const now = new Date().toISOString();
+    this.database.transaction(() => {
+      this.database.run(`
+        UPDATE segments
+        SET status = 'queued', error_message = NULL, updated_at = ?
+        WHERE status = 'processing'
+      `, [now]);
+      this.database.run(`
+        UPDATE documents
+        SET status = 'failed', updated_at = ?
+        WHERE status = 'analyzing'
+          AND EXISTS (
+            SELECT 1
+            FROM segments
+            WHERE segments.document_id = documents.id
+              AND segments.status = 'queued'
+          )
+      `, [now]);
+    });
+  }
+
   public markSegmentProcessing(segmentId: string): boolean {
     return this.database.run(`
       UPDATE segments

@@ -35,6 +35,8 @@ export interface TtsRequest {
   text: string;
   voice: string;
   speed: number;
+  format: string;
+  ssmlVersion?: string;
   prosody: Record<string, string>;
 }
 

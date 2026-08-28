@@ -16,6 +16,7 @@ export async function createApp(config: AppConfig): Promise<FastifyInstance> {
   const providers = createProviderRegistry(config);
   const database = await createDatabase(config.databaseFile);
   const repository = new DocumentRepository(database);
+  repository.recoverInterruptedAnalyses();
   const analysisService = new AnalysisService(repository, providers.llm, config.llmPromptVersion);
 
   registerHealthRoutes(app, database);

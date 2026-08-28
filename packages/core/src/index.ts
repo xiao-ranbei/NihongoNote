@@ -11,6 +11,7 @@ export {
   segmentViewSchema,
   segmentStatusSchema,
   targetLevelSchema,
+  tokenCategorySchema,
   tokenAnalysisSchema,
   updateDocumentInputSchema
 } from "./domain.js";
@@ -28,6 +29,7 @@ export type {
   SegmentStatus,
   SegmentView,
   TargetLevel,
+  TokenCategory,
   TokenAnalysis,
   UpdateDocumentInput
 } from "./domain.js";

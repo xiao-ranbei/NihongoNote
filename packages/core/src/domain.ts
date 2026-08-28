@@ -9,6 +9,9 @@ export type DocumentStatus = z.infer<typeof documentStatusSchema>;
 export const segmentStatusSchema = z.enum(["queued", "processing", "completed", "failed"]);
 export type SegmentStatus = z.infer<typeof segmentStatusSchema>;
 
+export const tokenCategorySchema = z.enum(["word", "particle", "adverb", "grammar"]);
+export type TokenCategory = z.infer<typeof tokenCategorySchema>;
+
 export const documentSummarySchema = z.object({
   id: z.string().min(1),
   title: z.string().min(1),
@@ -41,6 +44,7 @@ export const tokenAnalysisSchema = z.object({
   startOffset: z.number().int().nonnegative(),
   endOffset: z.number().int().positive(),
   surface: z.string().min(1),
+  category: tokenCategorySchema.default("word"),
   lemma: z.string().min(1).nullable(),
   reading: z.string().min(1).nullable(),
   partOfSpeech: z.string().min(1).nullable(),

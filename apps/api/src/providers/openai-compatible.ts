@@ -56,8 +56,10 @@ Each analysis must contain:
 - uncertaintyNote: a clear uncertainty note or null
 - tokens: an array of meaningful surface tokens
 
-Each token must contain tokenId, startOffset, endOffset, surface, lemma, reading, partOfSpeech,
-conjugation, gloss, particleFunction, grammarPoint, explanation, and confidence.
+Each token must contain tokenId, startOffset, endOffset, surface, category, lemma, reading, partOfSpeech,
+conjugation, gloss, particleFunction, grammarPoint, explanation, and confidence. Set category to exactly
+one of "word", "particle", "adverb", or "grammar": use "particle" for 助词, "adverb" for 副词,
+"grammar" for a token that carries a grammar construction or function, and "word" for other vocabulary.
 The user payload provides the deterministic token boundaries. Return exactly one token analysis for
 each provided boundary, preserving tokenId, startOffset, endOffset, and surface exactly.
 Token offsets are JavaScript UTF-16 offsets relative to that segment's text. Use null for a field that
