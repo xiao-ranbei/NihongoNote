@@ -1,0 +1,644 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>NihongoNote 标注视觉原型</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #3e342b;
+        --muted: #76695d;
+        --paper: #fffaf3;
+        --panel: #fffdf9;
+        --line: #e6d9c9;
+        --sentence-fill: rgba(226, 237, 247, 0.82);
+        --grammar-fill: rgba(250, 232, 210, 0.78);
+        --word-fill: #f2eadf;
+        --particle-fill: #e3f0ec;
+        --functional-fill: #f6e4e9;
+        --adverb-fill: #ece7f5;
+        --word-line: #bd955d;
+        --particle-line: #559587;
+        --functional-line: #b46c84;
+        --adverb-line: #8e79bd;
+        --grammar-line: #cb8d4e;
+        --tone-line: #b55f7d;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background:
+          radial-gradient(circle at 12% 0%, rgba(242, 228, 205, 0.54), transparent 34rem),
+          var(--paper);
+        color: var(--ink);
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      main {
+        width: min(1440px, calc(100% - 32px));
+        margin: 0 auto;
+        padding: 32px 0 52px;
+      }
+
+      h1,
+      h2,
+      p {
+        margin-top: 0;
+      }
+
+      h1 {
+        margin-bottom: 8px;
+        font-size: clamp(1.45rem, 3vw, 2.2rem);
+        letter-spacing: 0.02em;
+      }
+
+      h2 {
+        margin-bottom: 6px;
+        font-size: 1.1rem;
+      }
+
+      .intro {
+        max-width: 900px;
+        color: var(--muted);
+        line-height: 1.7;
+      }
+
+      .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px 16px;
+        align-items: center;
+        margin: 24px 0 18px;
+        padding: 14px 16px;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        background: rgba(255, 253, 249, 0.84);
+      }
+
+      .toolbar-group {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 14px;
+        align-items: center;
+      }
+
+      .toolbar-label {
+        color: var(--muted);
+        font-size: 0.88rem;
+        font-weight: 700;
+      }
+
+      button,
+      label {
+        cursor: pointer;
+      }
+
+      button {
+        border: 1px solid #cdbca6;
+        border-radius: 999px;
+        padding: 8px 13px;
+        background: #fffdf9;
+        color: var(--ink);
+        font: inherit;
+      }
+
+      button:hover,
+      button:focus-visible {
+        border-color: #9d7f5d;
+        outline: 3px solid rgba(157, 127, 93, 0.16);
+      }
+
+      button.is-active {
+        border-color: #8f6e49;
+        background: #f2e5d4;
+      }
+
+      input {
+        accent-color: #8f6e49;
+      }
+
+      .compare {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 18px;
+      }
+
+      .panel {
+        min-width: 0;
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        background: var(--panel);
+        box-shadow: 0 10px 28px rgba(86, 62, 35, 0.07);
+      }
+
+      .panel-heading {
+        padding: 18px 20px 14px;
+        border-bottom: 1px solid var(--line);
+        background: linear-gradient(135deg, #fffdf9, #f8f0e6);
+      }
+
+      .panel-heading p {
+        margin-bottom: 0;
+        color: var(--muted);
+        font-size: 0.88rem;
+        line-height: 1.55;
+      }
+
+      .article-canvas {
+        min-height: 420px;
+        padding: clamp(20px, 3vw, 32px);
+      }
+
+      .article-content {
+        color: var(--ink);
+        font-family: "Yu Mincho", "Hiragino Mincho ProN", serif;
+        font-size: clamp(1rem, 1.5vw, 1.18rem);
+        letter-spacing: 0.02em;
+        line-height: 2.45;
+      }
+
+      .turn {
+        display: block;
+        margin: 0 0 18px;
+        padding: 5px 8px;
+        border-left: 4px solid #d9c5aa;
+      }
+
+      .turn:last-child {
+        margin-bottom: 0;
+      }
+
+      .speaker {
+        display: inline-block;
+        margin-right: 5px;
+        color: #765638;
+        font-family: system-ui, sans-serif;
+        font-size: 0.82em;
+        font-weight: 800;
+        letter-spacing: 0;
+        vertical-align: 0.08em;
+      }
+
+      .sentence {
+        position: relative;
+        z-index: 0;
+        display: inline;
+        margin: 0 0.1em;
+        padding: 0.1em 0.28em;
+        border-radius: 7px;
+        background: var(--sentence-fill);
+        box-shadow: inset 0 -1px 0 rgba(123, 155, 181, 0.32);
+        transition: background 160ms ease, box-shadow 160ms ease;
+        -webkit-box-decoration-break: clone;
+        box-decoration-break: clone;
+      }
+
+      .sentence:hover,
+      .sentence.is-selected {
+        background: rgba(215, 231, 246, 0.98);
+        box-shadow: 0 0 0 3px rgba(126, 158, 187, 0.24);
+      }
+
+      .token,
+      .range {
+        position: relative;
+        z-index: 1;
+        border-radius: 4px;
+        transition: background 160ms ease, box-shadow 160ms ease, text-decoration-color 160ms ease;
+      }
+
+      .token {
+        position: relative;
+        display: inline;
+        padding: 1px 2px;
+        cursor: pointer;
+      }
+
+      .token:hover,
+      .token.is-selected,
+      .range:hover,
+      .range.is-selected {
+        box-shadow: 0 0 0 2px rgba(111, 89, 61, 0.16);
+      }
+
+      .token.word {
+        border-bottom: 2px solid var(--word-line);
+      }
+
+      .token.particle {
+        border-bottom: 3px double var(--particle-line);
+      }
+
+      .token.functional {
+        border-bottom: 2px dashed var(--functional-line);
+      }
+
+      .token.adverb {
+        border-bottom: 2px solid var(--adverb-line);
+      }
+
+      .range.grammar {
+        background: var(--grammar-fill);
+        text-decoration: underline wavy var(--grammar-line) 2px;
+        text-underline-offset: 0.32em;
+      }
+
+      .range.tone {
+        text-decoration: underline wavy var(--tone-line) 2px;
+        text-underline-offset: 0.58em;
+        border-bottom: 2px dotted var(--tone-line);
+      }
+
+      .token.word-fill {
+        background: var(--word-fill);
+      }
+
+      .token.particle-fill {
+        background: var(--particle-fill);
+      }
+
+      .token.functional-fill {
+        background: var(--functional-fill);
+      }
+
+      .token.adverb-fill {
+        background: var(--adverb-fill);
+      }
+
+      .scope-off .sentence {
+        background: transparent;
+        box-shadow: none;
+      }
+
+      .grammar-off .range.grammar {
+        background: transparent;
+        text-decoration: none;
+      }
+
+      .tone-off .range.tone {
+        border-bottom-color: transparent;
+        text-decoration: none;
+      }
+
+      .panel-legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 13px;
+        margin-top: 18px;
+        color: var(--muted);
+        font-family: system-ui, sans-serif;
+        font-size: 0.78rem;
+        line-height: 1.5;
+      }
+
+      .legend-item {
+        display: inline-flex;
+        gap: 5px;
+        align-items: center;
+      }
+
+      .legend-swatch {
+        display: inline-block;
+        width: 22px;
+        height: 10px;
+        border-radius: 3px;
+      }
+
+      .legend-swatch.sentence-swatch {
+        background: var(--sentence-fill);
+      }
+
+      .legend-swatch.word-swatch {
+        border-bottom: 2px solid var(--word-line);
+        background: var(--word-fill);
+      }
+
+      .legend-swatch.particle-swatch {
+        border-bottom: 3px double var(--particle-line);
+        background: var(--particle-fill);
+      }
+
+      .legend-swatch.functional-swatch {
+        border-bottom: 2px dashed var(--functional-line);
+        background: var(--functional-fill);
+      }
+
+      .legend-swatch.grammar-swatch {
+        background: var(--grammar-fill);
+        text-decoration: underline wavy var(--grammar-line) 2px;
+        text-underline-offset: 0.35em;
+      }
+
+      .legend-swatch.tone-swatch {
+        border-bottom: 2px dotted var(--tone-line);
+        text-decoration: underline wavy var(--tone-line) 2px;
+        text-underline-offset: 0.45em;
+      }
+
+      .interaction-note {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 18px;
+        align-items: start;
+        margin-top: 18px;
+        padding: 16px 18px;
+        border: 1px solid #dfcfba;
+        border-radius: 14px;
+        background: #fff7eb;
+      }
+
+      .interaction-note p {
+        margin-bottom: 0;
+        color: var(--muted);
+        line-height: 1.65;
+      }
+
+      .interaction-state {
+        min-width: 190px;
+        padding: 11px 13px;
+        border-radius: 10px;
+        background: #f3e4d1;
+        color: #6f4f31;
+        font-size: 0.9rem;
+        font-weight: 700;
+        line-height: 1.5;
+      }
+
+      .source-note {
+        margin-top: 20px;
+        color: var(--muted);
+        font-size: 0.86rem;
+        line-height: 1.65;
+      }
+
+      @media (max-width: 920px) {
+        .compare {
+          grid-template-columns: 1fr;
+        }
+
+        .interaction-note {
+          grid-template-columns: 1fr;
+        }
+
+        .interaction-state {
+          min-width: 0;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>NihongoNote 标注视觉原型</h1>
+      <p class="intro">
+        这是一个只用于比较视觉效果的静态原型。左侧给普通词、助词和副词增加浅色块，右侧只让色块表达句子/结构范围，
+        词语类别使用下划线。点击带标记的文字，可以观察解析层级切换；这里的标注内容是手工示例，不代表最终 AI 输出。
+      </p>
+
+      <div class="toolbar" aria-label="原型控制">
+        <div class="toolbar-group">
+          <span class="toolbar-label">显示层：</span>
+          <label><input id="scope-toggle" type="checkbox" checked> 句子色块</label>
+          <label><input id="grammar-toggle" type="checkbox" checked> 语法色块/波浪线</label>
+          <label><input id="tone-toggle" type="checkbox" checked> 语气双层波浪线</label>
+        </div>
+        <div class="toolbar-group">
+          <span class="toolbar-label">左侧色块：</span>
+          <label><input id="word-fill-toggle" type="checkbox" checked> 普通词</label>
+          <label><input id="particle-fill-toggle" type="checkbox" checked> 助词</label>
+          <label><input id="functional-fill-toggle" type="checkbox" checked> 功能词</label>
+          <label><input id="adverb-fill-toggle" type="checkbox" checked> 副词</label>
+        </div>
+        <button id="reset-button" type="button">重置点击状态</button>
+      </div>
+
+      <section class="compare" aria-label="两种标注方案对比">
+        <article class="panel">
+          <div class="panel-heading">
+            <h2>方案 A：词语、助词和功能词都有浅色块</h2>
+            <p>句子使用结构色块，普通词/助词/功能词/副词再使用低饱和度色块和线型区分。</p>
+          </div>
+          <div class="article-canvas">
+            <div class="article-content" id="article-with-fills">
+              <span class="turn">
+                <span class="speaker">李：</span>
+                <span class="sentence interactive" data-kind="sentence" data-info="第 1 句：初次见面、身份说明和感谢。">
+                  <span class="token word word-fill interactive" data-kind="word" data-info="初めまして：初次见面时使用的寒暄语。">初めまして</span>、
+                  <span class="token word word-fill interactive" data-kind="word" data-info="〇〇社：公司名称的占位写法。">〇〇社</span>
+                  <span class="token particle particle-fill interactive" data-kind="particle" data-info="の：连接公司和所属人员，表示所属关系。">の</span>
+                  <span class="token word word-fill interactive" data-kind="word" data-info="李：说话人的姓氏。">李</span>
+                  <span class="range grammar interactive" data-kind="grammar" data-info="と申します：申す是言う的自谦语，用于正式介绍自己。">
+                    <span class="token particle particle-fill interactive" data-kind="particle" data-info="と：引出称呼或发言内容。">と</span><span class="token word word-fill interactive" data-kind="word" data-info="申します：申す的礼貌形式，表示谦逊地说。">申します</span>
+                  </span>。
+                </span>
+                <span class="sentence interactive" data-kind="sentence" data-info="第 2 句：对对方在百忙之中的时间表示感谢。">
+                  <span class="token word word-fill interactive" data-kind="word" data-info="本日：今天，正式表达。">本日</span>
+                  <span class="token particle particle-fill interactive" data-kind="particle" data-info="は：提示本句的主题。">は</span>
+                  <span class="token word word-fill interactive" data-kind="word" data-info="お忙しい中：表示对方在忙碌之中仍抽出时间。">お忙しい中</span>、
+                  <span class="token word word-fill interactive" data-kind="word" data-info="お時間：时间，带有礼貌前缀。">お時間</span>
+                  <span class="token particle particle-fill interactive" data-kind="particle" data-info="を：标记いただく所接受的对象。">を</span>
+                  <span class="range grammar interactive" data-kind="grammar" data-info="お時間をいただき：字面是“得到您的时间”，在商务场景中是感谢对方抽时间。">
+                    <span class="token word word-fill interactive" data-kind="word" data-info="いただき：いただく的连接形式。">いただき</span>
+                  </span>
+                  <span class="token adverb adverb-fill interactive" data-kind="adverb" data-info="誠に：非常、诚挚地，正式程度高。">誠に</span>
+                  <span class="token word word-fill interactive" data-kind="word" data-info="ありがとうございます：表示感谢的礼貌表达。">ありがとうございます</span>。
+                </span>
+                <span class="sentence interactive" data-kind="sentence" data-info="第 3 句：说明自己的负责范围，并提出要询问需求。">
+                  <span>
+                    <span class="token word word-fill interactive" data-kind="word" data-info="ソフトウェア設計：软件设计。">ソフトウェア設計</span>
+                    <span class="token particle particle-fill interactive" data-kind="particle" data-info="を：标记担当する的对象。">を</span>
+                    <span class="token word word-fill interactive" data-kind="word" data-info="担当しています：正在负责。">担当しています</span>
+                    <span class="token particle particle-fill interactive" data-kind="particle" data-info="が：这里起缓冲和承接作用，不一定表示强转折。">が</span>、
+                  </span>
+                  <span>
+                    <span class="token word word-fill interactive" data-kind="word" data-info="田中部長：田中部长。">田中部長</span>
+                    <span class="token particle particle-fill interactive" data-kind="particle" data-info="の：连接职位和 IT 化的需求，表示修饰关系。">の</span>
+                    <span class="token word word-fill interactive" data-kind="word" data-info="IT 化：IT 化、信息化。">IT 化</span>
+                    <span class="token particle particle-fill interactive" data-kind="particle" data-info="の：连接 IT 化和需求。">の</span>
+                    <span class="token word word-fill interactive" data-kind="word" data-info="ご要件：需求，带有礼貌前缀。">ご要件</span>
+                    <span class="range grammar interactive" data-kind="grammar" data-info="について：关于……，说明询问或讨论的主题。">
+                      <span class="token particle particle-fill interactive" data-kind="particle" data-info="について：关于……，在本句中引出要询问的内容。">について</span>
+                    </span>
+                    <span class="range grammar interactive" data-kind="grammar" data-info="伺わせていただきます：商务场景中的谦逊表达，表示“请允许我询问”。">
+                      <span class="token word word-fill interactive" data-kind="word" data-info="伺わせていただきます：表示谦逊地询问。">伺わせていただきます</span>
+                    </span>。
+                  </span>
+                </span>
+              </span>
+
+              <span class="turn">
+                <span class="speaker">田中部长：</span>
+                <span class="sentence interactive" data-kind="sentence" data-info="第 4 句：初次见面后的自我介绍和礼貌寒暄。">
+                  <span class="token word word-fill interactive" data-kind="word" data-info="初めまして：初次见面时的寒暄。">初めまして</span>、
+                  <span class="token word word-fill interactive" data-kind="word" data-info="田中です：说明姓名。">田中</span>
+                  <span class="token functional functional-fill interactive" data-kind="functional" data-info="です：判断助动词，表示礼貌的断定。">です</span>。
+                  <span class="token word word-fill interactive" data-kind="word" data-info="よろしくお願いします：初次见面时的固定礼貌表达。">よろしくお願いします</span>。
+                </span>
+                <span class="sentence interactive" data-kind="sentence" data-info="第 5 句：说明业务效率下降，并委婉表达改善愿望。">
+                  <span>
+                    <span class="token adverb adverb-fill interactive" data-kind="adverb" data-info="実は：其实、实际上，常用于引出背景或不便直说的内容。">実は</span>、
+                    <span class="token word word-fill interactive" data-kind="word" data-info="うちの営業部門：我们公司的销售部门。">うちの営業部門</span>
+                    <span class="token particle particle-fill interactive" data-kind="particle" data-info="の：连接部门和业务效率。">の</span>
+                    <span class="token word word-fill interactive" data-kind="word" data-info="業務効率：业务效率。">業務効率</span>
+                    <span class="token particle particle-fill interactive" data-kind="particle" data-info="が：标记发生变化的对象。">が</span>
+                    <span class="range grammar interactive" data-kind="grammar" data-info="ここ数年低下していて：说明近几年持续下降，并连接后面的背景。">
+                      <span class="token word word-fill interactive" data-kind="word" data-info="ここ数年：这几年。">ここ数年</span><span class="token word word-fill interactive" data-kind="word" data-info="低下していて：低下并处于该状态。">低下していて</span>
+                    </span>、
+                  </span>
+                  <span>
+                    <span class="range tone interactive" data-kind="tone" data-info="何とか……できないかと考えているんです：语气较委婉，表达“能否想办法改善”的愿望，而不是强硬要求。">
+                      <span class="token adverb adverb-fill interactive" data-kind="adverb" data-info="何とか：想办法、无论如何。">何とか</span>
+                      <span class="token word word-fill interactive" data-kind="word" data-info="改善できないか：能不能改善，带有试探。">改善できないか</span>
+                      <span class="token particle particle-fill interactive" data-kind="particle" data-info="と：引用内心想法或考虑的内容。">と</span>
+                      <span class="token word word-fill interactive" data-kind="word" data-info="考えているんです：正在这样考虑，んです带有说明背景的语气。">考えているんです</span>
+                    </span>。
+                  </span>
+                </span>
+              </span>
+            </div>
+            <div class="panel-legend" aria-label="方案 A 图例">
+              <span class="legend-item"><span class="legend-swatch sentence-swatch"></span>句子范围</span>
+              <span class="legend-item"><span class="legend-swatch word-swatch"></span>普通词</span>
+              <span class="legend-item"><span class="legend-swatch particle-swatch"></span>助词</span>
+              <span class="legend-item"><span class="legend-swatch functional-swatch"></span>功能词</span>
+              <span class="legend-item"><span class="legend-swatch grammar-swatch"></span>多词语法</span>
+              <span class="legend-item"><span class="legend-swatch tone-swatch"></span>语气/态度</span>
+            </div>
+          </div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-heading">
+            <h2>方案 B：色块只表示结构，词语使用线型</h2>
+            <p>色块集中表达句子范围，普通词、助词、副词和语法通过线型区分，视觉更克制。</p>
+          </div>
+          <div class="article-canvas">
+            <div class="article-content" id="article-structure-only"></div>
+            <div class="panel-legend" aria-label="方案 B 图例">
+              <span class="legend-item"><span class="legend-swatch sentence-swatch"></span>句子范围</span>
+              <span class="legend-item"><span class="legend-swatch word-swatch"></span>普通词</span>
+              <span class="legend-item"><span class="legend-swatch particle-swatch"></span>助词</span>
+              <span class="legend-item"><span class="legend-swatch functional-swatch"></span>功能词</span>
+              <span class="legend-item"><span class="legend-swatch grammar-swatch"></span>多词语法</span>
+              <span class="legend-item"><span class="legend-swatch tone-swatch"></span>语气/态度</span>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <section class="interaction-note">
+        <div>
+          <h2>点击层级演示</h2>
+          <p>
+            点击同一处带标记文字，可以循环查看“结构范围 → 词语/助词 → 语法 → 语气”。点击其他文字会从第一层重新开始。
+            这是交互概念演示，最终层级数量和优先级仍需根据你的选择确定。
+          </p>
+        </div>
+        <div class="interaction-state" id="interaction-state" aria-live="polite">
+          尚未选择文字
+        </div>
+      </section>
+
+      <p class="source-note">
+        原文按你提供的两轮对话展示。这里没有把输入中的自动换行当作新的语义段落，只使用浏览器自然换行；
+        这部分规则仍可以在正式需求中单独决定。
+      </p>
+    </main>
+
+    <script>
+      const sourceArticle = document.getElementById("article-with-fills");
+      const structureArticle = document.getElementById("article-structure-only");
+      const interactionState = document.getElementById("interaction-state");
+      const controls = {
+        scope: document.getElementById("scope-toggle"),
+        grammar: document.getElementById("grammar-toggle"),
+        tone: document.getElementById("tone-toggle"),
+        wordFill: document.getElementById("word-fill-toggle"),
+        particleFill: document.getElementById("particle-fill-toggle"),
+        functionalFill: document.getElementById("functional-fill-toggle"),
+        adverbFill: document.getElementById("adverb-fill-toggle")
+      };
+
+      structureArticle.innerHTML = sourceArticle.innerHTML;
+      structureArticle.querySelectorAll(".token").forEach((token) => {
+        token.classList.remove("word-fill", "particle-fill", "functional-fill", "adverb-fill");
+      });
+
+      const stageLabels = {
+        sentence: "结构范围",
+        word: "词语",
+        particle: "助词",
+        functional: "功能词",
+        adverb: "副词",
+        grammar: "语法",
+        tone: "语气/态度"
+      };
+
+      function allArticles() {
+        return document.querySelectorAll(".article-content");
+      }
+
+      function updateVisualState() {
+        allArticles().forEach((article) => {
+          article.classList.toggle("scope-off", !controls.scope.checked);
+          article.classList.toggle("grammar-off", !controls.grammar.checked);
+          article.classList.toggle("tone-off", !controls.tone.checked);
+        });
+
+        document.querySelectorAll("#article-with-fills .token").forEach((token) => {
+          token.classList.toggle("word-fill", controls.wordFill.checked && token.classList.contains("word"));
+          token.classList.toggle("particle-fill", controls.particleFill.checked && token.classList.contains("particle"));
+          token.classList.toggle("functional-fill", controls.functionalFill.checked && token.classList.contains("functional"));
+          token.classList.toggle("adverb-fill", controls.adverbFill.checked && token.classList.contains("adverb"));
+        });
+      }
+
+      function resetSelection() {
+        document.querySelectorAll(".is-selected").forEach((element) => {
+          element.classList.remove("is-selected");
+          delete element.dataset.stageIndex;
+        });
+        interactionState.textContent = "尚未选择文字";
+      }
+
+      function showSelection(element) {
+        const kind = element.dataset.kind || "sentence";
+        const currentIndex = Number(element.dataset.stageIndex || "-1");
+        const nextIndex = (currentIndex + 1) % 4;
+        const cycle = ["sentence", kind, "grammar", "tone"];
+        const stage = cycle[nextIndex];
+
+        document.querySelectorAll(".is-selected").forEach((selected) => {
+          if (selected !== element) {
+            selected.classList.remove("is-selected");
+            delete selected.dataset.stageIndex;
+          }
+        });
+
+        element.dataset.stageIndex = String(nextIndex);
+        element.classList.add("is-selected");
+        interactionState.textContent =
+          `${stageLabels[stage] || stage}：${element.dataset.info || "当前范围的示例解析"}`;
+      }
+
+      document.addEventListener("click", (event) => {
+        const target = event.target.closest(".interactive");
+        if (target) {
+          showSelection(target);
+        }
+      });
+
+      Object.values(controls).forEach((control) => {
+        control.addEventListener("change", updateVisualState);
+      });
+
+      document.getElementById("reset-button").addEventListener("click", resetSelection);
+      updateVisualState();
+    </script>
+  </body>
+</html>

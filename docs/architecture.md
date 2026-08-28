@@ -1,7 +1,7 @@
 # 技术架构方案
 
 **状态**：第一版推荐方案（已确定首个 LLM 接入路径）
-**适用范围**：单用户、本机 Web 应用、允许使用云端 AI/TTS
+**适用范围**：单用户、本机 Web 应用、允许使用云端 LLM；TTS provider 仅预留接口
 
 ## 一、总体架构
 
@@ -9,15 +9,15 @@
 flowchart LR
   Browser[React 阅读器] --> API[本机 Node API]
   API --> DB[(SQLite)]
-  API --> Files[(本地音频/录音文件)]
   API --> Tokenizer[日语形态素分析器]
   API --> LLM[LLM Provider Adapter]
-  API --> TTS[TTS Provider Adapter]
+  API --> TTS[TTS Provider Adapter（后续）]
   LLM --> Schema[结构化解析校验]
   Schema --> DB
+  TTS --> Audio[AudioAsset（后续）]
 ```
 
-核心原则是：浏览器只负责展示和录音，本机服务负责 API 密钥、任务编排、数据落盘和第三方调用。
+核心原则是：浏览器只负责展示，本机服务负责 API 密钥、任务编排、数据落盘和第三方 LLM 调用。
 
 ## 二、推荐技术栈
 
@@ -27,15 +27,14 @@ flowchart LR
 - 本机后端：Node.js + TypeScript + Fastify，位于 `apps/api/`；
 - 共用领域包：`packages/core/`，存放 Zod schema 和类型；
 - 数据库：SQLite，通过 `sql.js`/WASM 运行在本机服务中，避免要求用户安装 C++ 原生编译工具；
-- 文件：项目 `data/` 下的音频和录音目录；
 - 校验：运行时 schema 校验库，例如 Zod；
 - 分词：服务端确定性日语 token 边界；当前使用 Node `Intl.Segmenter` 的日语 word segmentation，后续可替换为 kuromoji.js 等形态素分析器；
-- 录音：浏览器 `MediaRecorder`；
+- TTS：通过 `TtsProvider` 预留标准日语朗读接口，当前保持 disabled；
 - 包管理：pnpm workspace。
 
 这套栈适合本地部署的原因是组件少、运行成本低、API 密钥不经过浏览器，也保留将来拆分或公网部署的空间。当前选择 `sql.js` 是为了让 Windows 开发环境不依赖 `better-sqlite3` 的原生模块编译；数据库在内存中运行，在写入后导出回本地 SQLite 文件。
 
-当前代码已经提供文章保存、SQLite 初始化、健康检查、基础分句、确定性 token 边界、前端阅读预览、DeepSeek OpenAI-compatible adapter 和句段分析任务；更细的日语形态素字段、TTS 及 Anthropic-compatible adapter 仍保持为后续适配器边界。
+当前代码已经提供文章保存、SQLite 初始化、健康检查、基础分句、确定性 token 边界、前端阅读预览、DeepSeek OpenAI-compatible adapter 和句段分析任务；TTS provider 当前保持 disabled，更细的日语形态素字段及 Anthropic-compatible adapter 仍保持为后续适配器边界。
 
 ## 三、模块边界
 
@@ -43,17 +42,20 @@ flowchart LR
 
 职责：
 
-- 文本输入、标题和难度设置；
-- 文章、段落和句子渲染；
+- 文本输入和标题；
+- 文章类型、混合区块和“是否参与解析”的预览与修正；
+- 在一个连续阅读框中渲染文章、段落和句子；
 - 将 token 偏移映射到原文；
-- 词语/助词悬浮卡片和句子详情面板；
+- 背景范围、词语线型和重叠标注的分层渲染；
+- 词语/助词/功能词/副词悬浮高亮、解析卡片和逐层点击状态；
+- “编辑解析”模式下的区块、分句、标注范围和字段修正；
 - 分析进度、失败重试和错误提示；
-- 播放音频、申请麦克风、录音和回放；
-- 历史列表和搜索。
+- 分析取消、剩余句段续跑；
+- 可折叠学习库、历史列表、搜索和筛选。
 
 前端不得：
 
-- 保存或暴露 LLM/TTS API 密钥；
+- 保存或暴露 LLM API 密钥；
 - 直接解析非结构化模型回答；
 - 用前端字符串搜索代替服务端稳定 ID。
 
@@ -62,12 +64,12 @@ flowchart LR
 职责：
 
 - 文档和段落 CRUD；
-- 分词和句子切分；
+- 内容区块、句子切分和分词；
 - 长文本切块和上下文窗口；
 - 调用 LLM、校验结果、保存状态；
-- TTS 生成与缓存；
-- 录音文件元数据保存；
-- 删除和搜索；
+- 取消分析并将未完成句段恢复为可续跑状态；
+- 保存 AI 原始结果和用户修正版本；
+- 删除、搜索和内容类型/分析状态筛选；
 - 统一错误、重试和取消。
 
 建议的接口（名称可在实现时微调）：
@@ -80,16 +82,20 @@ PATCH  /api/documents/:documentId
 DELETE /api/documents/:documentId
 
 POST   /api/documents/:documentId/analyze
+POST   /api/documents/:documentId/analyze/cancel
 GET    /api/documents/:documentId/progress
 POST   /api/segments/:segmentId/retry
+PATCH  /api/documents/:documentId/blocks/:blockId
+PATCH  /api/segments/:segmentId/annotations
 
+GET    /api/search?q=...&contentType=...&status=...
+```
+
+以下接口仅作为后续 TTS 播放预留，不属于当前版本：
+
+```text
 POST   /api/segments/:segmentId/audio
 GET    /api/audio/:audioId
-POST   /api/segments/:segmentId/recordings
-GET    /api/recordings/:recordingId
-DELETE /api/recordings/:recordingId
-
-GET    /api/search?q=...
 ```
 
 第一版是单用户本机应用，不需要账号认证；仍应限制请求体大小、校验文件类型和将服务绑定到 `127.0.0.1`。
@@ -97,13 +103,13 @@ GET    /api/search?q=...
 ## 四、AI 分析流水线
 
 1. **输入规范化**：保留原文、换行和标点，生成文档版本。
-2. **句子切分**：按日语标点、换行和对话标记生成稳定的 segment ID。
-3. **本地 token 边界**：使用确定性日语分词取得 surface 和字符偏移；模型只补充原形、读音、词性、词义和语法字段。
+2. **区块和句子切分**：空行划分独立段落/区块；再按标题/注释候选、日语标点和对话标记生成稳定的 block/segment ID，句末标点属于句子范围。普通单换行只作为保留的排版空白，不自动创建新的段落或句子；说话人标签保留在原文中但单独存储，不进入日语 token 或 AI 分析；保留用户对区块类型和分析开关的覆盖。
+3. **本地 token 边界**：保存后自动使用确定性日语分词取得 surface 和字符偏移，不产生云端调用；用户启动深度分析后，模型只补充原形、读音、词性、词义和语法字段。
 4. **分块**：按段落和 token/字符上限组合请求；每块携带有限的前后文。
-5. **结构化生成**：要求模型只返回版本化 JSON，不让前端依赖 Markdown。
-6. **schema 校验**：校验 segment ID、token 范围和必填字段；失败则标记为失败并显示原因。
-7. **落盘**：每个 segment 独立保存，支持增量展示和断点续跑。
-8. **人工修正入口**：允许修正角色、难度和明显错误；修正不应覆盖原始模型响应。
+5. **结构化生成**：用户启动深度分析后，一次生成已启用区块的词语、助词、功能词、副词、语法、句子、语气和对话关系解析；要求模型只返回版本化 JSON，不让前端依赖 Markdown。
+6. **schema 校验**：校验 block/segment ID、token 范围、跨 token 标注范围和必填字段；失败则标记为失败并显示原因。
+7. **落盘**：每个 segment 独立保存，范围标注和原始响应分别保存，支持增量展示、取消后续跑和断点续跑。
+8. **人工修正入口**：允许修正区块、角色、分句、标注范围和字段；修正不应覆盖原始模型响应。
 
 ### 结构化输出要求
 
@@ -113,10 +119,15 @@ GET    /api/search?q=...
 - segment ID；
 - 每个 token 的偏移或 token ID；
 - 词汇/助词/语法解释；
-- 句意、语气、礼貌程度、潜台词；
+- 句意、会话功能标签、情绪/态度标签、语气强度（`weak`/`medium`/`strong`）、总体礼貌等级（随意/普通/礼貌/尊敬/自谦）、具体语体/敬语形式标签（普通体、敬体、尊敬语、自谦语、丁寧语/礼貌表达、郑重语、商务正式表达）、潜台词及其原文依据；
+- `translation` 默认是自然中文译文；直译字段按用户主动请求按需生成，不作为首次深度分析的必填输出；
 - 对话中的上下文和回复理由；
 - `confidence` 或 `uncertaintyNote`；
 - 模型无法判断时的明确标记。
+- 内容类型/区块类型建议和识别依据；用户手动指定的类型优先于模型建议。
+- 多词语法、语气/态度/隐含意义的范围标识，以及它们关联的 token ID。
+- 会话功能和情绪/态度应分别返回可多选的稳定标签；同时返回 `weak`/`medium`/`strong` 强度等级和 evidence token/range ID，不能只有无法校验的自由文本。
+- 对话关系引用的相邻 segment ID；非对话材料没有依据时返回空关系。
 
 推荐把“原始响应”和“规范化结果”分开保存，方便排查模型质量问题。
 
@@ -130,6 +141,46 @@ GET    /api/search?q=...
 - 在 UI 中显示当前块和预计剩余段数；
 - 跨块引用保持文档内 segment ID，不复制大量原文。
 
+### 连续文章和分层标注实现方案
+
+#### 原文和范围模型
+
+1. 保存前输入仍可编辑；保存后服务端保留不可变的 `sourceText`，所有 block、segment、token 和 annotation range 都使用相对于原文/句段的 UTF-16 偏移与稳定 ID。
+2. `ContentBlock` 表示标题、正文、对话、例句或注释等区块，带有检测类型、用户选择类型和 `analysisEnabled`。标题、编号和中文注释默认关闭解析，正文和日语例句默认开启。
+3. `TokenAnalysis` 只表示确定性的词语边界；跨多个 token 的分句、语法、语气和态度使用 `AnnotationRange` 表示，并通过 token ID 关联。
+4. AI 返回的范围必须通过原文切片、ID 归属和边界检查。无法验证的范围不能进入完成状态，只能进入失败或待人工修正状态。
+
+#### 前端分层渲染
+
+前端不为每个句子创建独立卡片，而是把完整文章切成最小连续文本片段，再为每个片段计算两套互相独立的视觉属性：
+
+- **背景层**：句子范围显示为最宽的底层背景；普通词、助词、助动词/其他功能词和副词使用较浅分类色块覆盖其上；多词语法的结构色块再覆盖对应词语范围。不为分句单独设置背景色，句子底色支持跨行显示。
+- **线型层**：普通词使用单层下划线，严格助词使用双层下划线，助动词/其他功能词使用虚线下划线，副词使用独立线色的单层下划线，多词语法使用单层波浪线，语气/态度/隐含意义使用双层波浪线。
+- 多词语法的整体背景和波浪线覆盖整个范围，但内部 token 的分类色块和下划线仍可呈现；背景层叠加是有意设计，不使用无语义的额外颜色。
+- 默认渲染所有可识别 token；按词性筛选属于前端显示状态，不得从已保存分析结果中删除 token。
+- 类别颜色具有固定语义，但不是唯一分类依据；图例、线型、焦点状态和可读的文字标签必须同步提供。颜色主题应使用统一设计 token，允许用户切换预设或调整，并以对比度和色盲可辨识性验收。
+
+实现上建议使用区间扫描（interval sweep）或等价的范围切分算法，先生成不重叠的原文片段，再合并背景层和线型层属性。不要通过嵌套多个可点击 `<button>` 表达重叠范围，否则会产生非法交互嵌套、焦点顺序和点击冒泡问题。
+
+#### 点击、悬浮和锚点卡片
+
+- 维护 `selectedSourceRange`、`interactionStage` 和当前卡片状态；同一原文位置重复点击时按“句子结构 → 词语/助词/功能词/副词 → 多词语法 → 语气/态度”循环，缺少对应标注时跳过该层，点击其他位置将阶段重置为第一层，点击文章外关闭卡片。
+- 悬浮只强化当前范围，不显示弹窗；句子、词语、助词、功能词、副词、语法和语气的完整解释统一在点击后打开。
+- 桌面端锚点卡片使用触发元素的几何位置计算，接近视口边缘时自动换位，并设置最大高度和滚动区域，避免遮住触发位置或溢出视口。
+- 移动端使用底部抽屉或侧边面板承载完整解析，不依赖 hover；键盘焦点和图例应能到达所有可交互范围。
+
+#### 内容类型、对话关系和编辑版本
+
+- 文章级类型作为默认值，区块级自动识别可以覆盖它；用户手动选择的区块类型和解析开关优先于 AI 建议。
+- 句意、语法、语气和不确定性是通用字段；对话关系只在有角色/上下文依据的区块中生成，分析时一次生成关系标签和自然语言原因，默认在当前句旁显示上一句/下一句的关系，用户展开后再显示句子之间的箭头和更多已生成关系。
+- “编辑解析”采用版本化或快照方式保存。用户修正与 AI 原始结果分开，重新分析时不得静默覆盖用户版本；若范围被重新分词，必须显示冲突并要求用户选择。
+
+#### 学习库布局
+
+- 桌面端使用可收缩的窄侧栏/图标轨道，折叠后主阅读区扩展；手机端使用覆盖主内容的抽屉。
+- 展开状态、搜索词和筛选条件属于前端界面状态；折叠偏好保存到本机浏览器。
+- 列表 API 支持最近更新时间、内容类型和分析状态筛选；第一版不引入文件夹和标签层级。`targetLevel` 字段保留在后台数据结构中，但当前界面和解析不使用它。
+
 ## 五、Provider Adapter
 
 ### LLM adapter
@@ -139,6 +190,8 @@ GET    /api/search?q=...
 ```text
 analyze(segments, context, targetLevel, promptVersion) -> ValidatedAnalysis
 ```
+
+当前产品不提供难度设置，`targetLevel` 仅作为兼容未来扩展的保留参数，统一使用固定值且不得改变当前解释方式。
 
 第一阶段实现两个层次：
 
@@ -154,6 +207,9 @@ provider 配置建议抽象为：
 provider, protocol, baseUrl, apiKey, model,
 temperature, maxTokens, timeoutMs
 ```
+
+TTS 预留配置为 `TTS_PROVIDER`、`TTS_VOICE`、`TTS_SPEED`、`TTS_FORMAT` 和
+`TTS_SSML_VERSION`；这些配置当前可以为空，`TTS_PROVIDER=disabled` 时不得发起第三方请求。
 
 首个 DeepSeek 配置的协议层示例：
 
@@ -200,6 +256,7 @@ P1 使用 `/chat/completions`，请求至少包含 system/user messages、model�
 - provider 返回的 token 边界与本地 token 边界不一致。
 
 DeepSeek 官方 JSON Output 说明还提示可能出现空内容或截断，因此不能把 HTTP 成功直接当作分析成功。
+当前模板将 `LLM_MAX_TOKENS` 默认设为 `12000`，长句仍应根据实际响应和 provider 上限调整；API 中途重启后，启动恢复逻辑会把 `processing` 句段重新置为 `queued`，避免任务永久卡住。
 
 #### Anthropic-compatible 适配器（后续实现）
 
@@ -207,34 +264,30 @@ DeepSeek 官方 JSON Output 说明还提示可能出现空内容或截断，因�
 
 前端只知道“分析成功/进行中/失败”，不应依赖某个供应商的响应格式。
 
-### TTS adapter
+## 六、TTS adapter（后续预留）
 
-统一接口应包含：
+当前版本不生成或播放音频，但保留独立的 TTS provider 接口：
 
 ```text
-synthesize(text, voice, prosody, ssmlVersion) -> AudioAsset
+synthesize(request: TtsRequest) -> TtsResult
+
+TtsRequest:
+  text, voice, speed, format, ssmlVersion?, prosody
+
+TtsResult:
+  provider, voice, format, audio
 ```
 
-第一版默认一个自然的东京式日语音色。应保留以下参数：
+未来 TTS 至少需要支持：
 
-- provider；
-- voice；
-- 角色；
-- 语速；
-- 音高；
-- 停顿/SSML 版本；
-- 输出格式。
+- 标准、清晰的日语朗读发音；
+- 按句子或段落播放、暂停、继续和从当前句开始；
+- 根据标点、普通排版换行和对话轮次产生合理停顿；
+- 语速调整；
+- 记录 provider、voice、语速、发音/韵律参数、格式和文本版本；
+- 按文本、voice、语速、韵律参数和格式缓存。
 
-这样后续可以为不同角色绑定不同音色和语气，而不改变文章数据模型。
-
-## 六、录音设计
-
-- 浏览器使用 `MediaRecorder`，录制当前句或段落；
-- 上传前在浏览器检查录音是否有数据；
-- 服务端保存原始 MIME 类型、扩展名、时长和 segment ID；
-- 默认保存到本地文件系统，SQLite 只保存元数据和相对路径；
-- 删除文章时清理关联文件，清理失败必须显示错误并保留可重试状态；
-- 暂不做发音评分，但数据模型不应阻止未来保存对齐结果。
+TTS provider 不应进入当前 P1 的分析任务；当前只保留接口、配置边界和 `AudioAsset` 数据模型，不实现录音或跟读。
 
 ## 七、成本和缓存
 
@@ -245,23 +298,21 @@ provider, model, promptVersion, inputUnits, outputUnits,
 segmentCount, cacheHit, startedAt, completedAt, errorCode
 ```
 
-不要在普通日志中写入完整文章或录音。缓存 key 至少包含：
+不要在普通日志中写入完整文章。缓存 key 至少包含：
 
 ```text
 hash(sourceText, tokenizerVersion, promptVersion, model, targetLevel)
 ```
 
-TTS 缓存还应包含 voice、prosody 和格式，否则切换语速/音色时可能错误复用旧音频。
-
 ## 八、隐私和错误处理
 
 ### 隐私
 
-- API 密钥只从本机环境变量读取；
+- LLM/TTS API 密钥只从本机环境变量读取；当前 TTS provider 未启用；
 - 服务默认只监听本机；
 - 关闭详细内容日志；
 - 在设置页显示当前 provider 和“内容会发送到云端”的提醒；
-- 提供删除文章、分析、TTS 和录音的操作；
+- 提供删除文章和分析结果的操作；
 - 文档中记录各供应商的保存/训练政策，实施时以官方政策为准。
 
 ### 错误分类
@@ -269,12 +320,10 @@ TTS 缓存还应包含 voice、prosody 和格式，否则切换语速/音色时�
 至少区分：
 
 - 输入为空或超过本地限制；
-- 麦克风权限被拒绝；
 - provider 认证失败；
 - provider 限流；
 - provider 网络超时；
 - 模型返回无法校验的 JSON；
-- 音频文件写入失败；
 - 数据库读写失败。
 
 每类错误要显示可行动的提示。不能把失败段落写成“已完成”，也不能用空字符串静默替代模型结果。
@@ -296,6 +345,5 @@ TTS 缓存还应包含 voice、prosody 和格式，否则切换语速/音色时�
 1. DeepSeek OpenAI-compatible API 在两篇商务材料和新增普通文章上的真实解析质量、JSON 稳定性、延迟和费用；
 2. DeepSeek 的具体模型名称、限流和价格，实施时以官方文档/控制台为准；
 3. Anthropic-compatible adapter 是否在 P1 后有实际价值，以及需要支持的最小字段集合；
-4. TTS 候选供应商的日语音色、SSML 和费用；
-5. 日语形态素分析器在助词、口语缩约和重复词上的偏移准确率；
-6. 浏览器录音格式在目标浏览器中的兼容性。
+4. 日语形态素分析器在助词、口语缩约和重复词上的偏移准确率；
+5. TTS provider 的标准发音、停顿、语速控制、费用和缓存行为。
