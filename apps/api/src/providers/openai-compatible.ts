@@ -1,3 +1,12 @@
+import fs from "node:fs";
+import path from "node:path";
+import { randomUUID } from "node:crypto";
+
+import OpenAI, {
+  APIConnectionTimeoutError,
+  APIError,
+  APIUserAbortError
+} from "openai";
 import { z } from "zod";
 
 import { segmentAnalysisSchema } from "@nihongonote/core";
@@ -8,8 +17,7 @@ import {
   type AnalysisRequest,
   type LlmAnalysisResult,
   type LlmProtocol,
-  type LlmProvider,
-  type LlmUsage
+  type LlmProvider
 } from "./types.js";
 
 interface OpenAiCompatibleProviderConfig {
@@ -20,21 +28,18 @@ interface OpenAiCompatibleProviderConfig {
   temperature: number;
   maxTokens: number;
   timeoutMs: number;
+  thinkingType: "enabled" | "disabled" | undefined;
+  reasoningEffort: "minimal" | "low" | "medium" | "high" | "xhigh" | undefined;
+  debugLogging: boolean;
+  debugLogFile: string;
 }
 
-const completionResponseSchema = z.object({
-  choices: z.array(z.object({
-    message: z.object({
-      content: z.string().nullable().optional()
-    }),
-    finish_reason: z.string().nullable().optional()
-  })).min(1),
-  usage: z.object({
-    prompt_tokens: z.number().int().nonnegative().optional(),
-    completion_tokens: z.number().int().nonnegative().optional(),
-    total_tokens: z.number().int().nonnegative().optional()
-  }).optional()
-});
+type DeepSeekChatCompletionParams =
+  OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming & {
+    thinking?: {
+      type: "enabled" | "disabled";
+    };
+  };
 
 const analysisEnvelopeSchema = z.object({
   analyses: z.array(segmentAnalysisSchema)
@@ -67,10 +72,35 @@ is not applicable or cannot be determined.
 Do not invent context. If multiple interpretations are reasonable, say so in uncertaintyNote.
 contentType is the user's selected document type. Treat it as authoritative; do not replace it with an inferred type.
 targetLevel controls explanation wording only. It must never change token boundaries, lexical facts, or grammar facts.
+Example JSON shape: {"analyses":[{"segmentId":"...","translation":"...","grammarSummary":"...","tone":"...","politeness":"...","impliedMeaning":null,"replyReason":null,"uncertaintyNote":null,"tokens":[]}]}
 The word JSON must be followed: do not wrap it in Markdown fences.`;
 
 function endpointFor(baseUrl: string): string {
   return new URL("chat/completions", `${baseUrl.replace(/\/+$/u, "")}/`).toString();
+}
+
+function writeDebugLog(
+  enabled: boolean,
+  filePath: string,
+  event: string,
+  requestId: string,
+  details: Record<string, unknown>
+): void {
+  if (!enabled) {
+    return;
+  }
+
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.appendFileSync(
+    filePath,
+    `${JSON.stringify({
+      timestamp: new Date().toISOString(),
+      event,
+      requestId,
+      ...details
+    })}\n`,
+    "utf8"
+  );
 }
 
 function parseJsonResponse(responseBody: string): unknown {
@@ -82,36 +112,14 @@ function parseJsonResponse(responseBody: string): unknown {
   }
 }
 
-function providerErrorMessage(payload: unknown, fallback: string): string {
-  if (typeof payload !== "object" || payload === null || !("error" in payload)) {
-    return fallback;
-  }
-
-  const providerError = payload.error;
-  if (typeof providerError === "string" && providerError.trim().length > 0) {
-    return providerError;
-  }
-  if (typeof providerError === "object" && providerError !== null && "message" in providerError) {
-    const message = providerError.message;
-    if (typeof message === "string" && message.trim().length > 0) {
-      return message;
-    }
-  }
-  return fallback;
-}
-
-function toUsage(usage: z.infer<typeof completionResponseSchema>["usage"]): LlmUsage | null {
-  if (!usage) {
-    return null;
-  }
-  return {
-    inputTokens: usage.prompt_tokens ?? null,
-    outputTokens: usage.completion_tokens ?? null,
-    totalTokens: usage.total_tokens ?? null
-  };
-}
-
-function requestPayload(request: AnalysisRequest, model: string, temperature: number, maxTokens: number) {
+function requestPayload(
+  request: AnalysisRequest,
+  model: string,
+  temperature: number,
+  maxTokens: number,
+  thinkingType: OpenAiCompatibleProviderConfig["thinkingType"],
+  reasoningEffort: OpenAiCompatibleProviderConfig["reasoningEffort"]
+): DeepSeekChatCompletionParams {
   return {
     model,
     messages: [
@@ -135,11 +143,13 @@ function requestPayload(request: AnalysisRequest, model: string, temperature: nu
         })
       }
     ],
-    temperature,
     max_tokens: maxTokens,
     response_format: {
       type: "json_object"
     },
+    ...(thinkingType ? { thinking: { type: thinkingType } } : {}),
+    ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
+    ...(thinkingType === "enabled" ? {} : { temperature }),
     stream: false
   };
 }
@@ -149,20 +159,35 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
   public readonly configured: boolean;
   public readonly model: string;
 
-  private readonly endpoint: string;
+  private readonly client: OpenAI | undefined;
   private readonly apiKey: string | undefined;
   private readonly temperature: number;
   private readonly maxTokens: number;
   private readonly timeoutMs: number;
+  private readonly thinkingType: OpenAiCompatibleProviderConfig["thinkingType"];
+  private readonly reasoningEffort: OpenAiCompatibleProviderConfig["reasoningEffort"];
+  private readonly debugLogging: boolean;
+  private readonly debugLogFile: string;
 
   public constructor(private readonly config: OpenAiCompatibleProviderConfig) {
     this.model = config.model;
     this.configured = config.apiKey !== undefined;
-    this.endpoint = endpointFor(config.baseUrl);
     this.apiKey = config.apiKey;
     this.temperature = config.temperature;
     this.maxTokens = config.maxTokens;
     this.timeoutMs = config.timeoutMs;
+    this.thinkingType = config.thinkingType;
+    this.reasoningEffort = config.reasoningEffort;
+    this.debugLogging = config.debugLogging;
+    this.debugLogFile = config.debugLogFile;
+    this.client = config.apiKey
+      ? new OpenAI({
+          apiKey: config.apiKey,
+          baseURL: config.baseUrl,
+          maxRetries: 0,
+          timeout: config.timeoutMs
+        })
+      : undefined;
   }
 
   public get name(): string {
@@ -170,7 +195,7 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
   }
 
   public async analyze(request: AnalysisRequest): Promise<LlmAnalysisResult> {
-    if (!this.apiKey) {
+    if (!this.apiKey || !this.client) {
       throw new ProviderConfigurationError(
         `LLM provider "${this.name}" requires LLM_API_KEY before analysis can start`
       );
@@ -179,46 +204,84 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
     request.signal.throwIfAborted();
     const timeoutSignal = AbortSignal.timeout(this.timeoutMs);
     const signal = AbortSignal.any([request.signal, timeoutSignal]);
-    let response: Response;
-    let responseBody: string;
+    const requestId = randomUUID();
+    const requestBody = requestPayload(
+      request,
+      this.model,
+      this.temperature,
+      this.maxTokens,
+      this.thinkingType,
+      this.reasoningEffort
+    );
+    const startedAt = Date.now();
+    writeDebugLog(
+      this.debugLogging,
+      this.debugLogFile,
+      "llm.request.started",
+      requestId,
+      {
+        provider: this.name,
+        protocol: this.protocol,
+        baseUrl: this.config.baseUrl,
+        endpoint: endpointFor(this.config.baseUrl),
+        model: this.model,
+        timeoutMs: this.timeoutMs,
+        body: requestBody,
+        note: "Authorization header is intentionally omitted; request body contains source text."
+      }
+    );
+    let completion: OpenAI.Chat.Completions.ChatCompletion;
     try {
-      response = await fetch(this.endpoint, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "authorization": `Bearer ${this.apiKey}`
-        },
-        body: JSON.stringify(requestPayload(request, this.model, this.temperature, this.maxTokens)),
-        signal
-      });
-      responseBody = await response.text();
+      completion = await this.client.chat.completions.create(
+        requestBody,
+        { signal }
+      );
     } catch (error) {
+      writeDebugLog(
+        this.debugLogging,
+        this.debugLogFile,
+        "llm.request.failed",
+        requestId,
+        {
+          durationMs: Date.now() - startedAt,
+          errorName: error instanceof Error ? error.name : "UnknownError",
+          errorMessage: error instanceof Error ? error.message : "unknown request error",
+          statusCode: error instanceof APIError ? error.status ?? null : null
+        }
+      );
       if (request.signal.aborted) {
         throw request.signal.reason instanceof Error
           ? request.signal.reason
           : new DOMException("Analysis cancelled", "AbortError");
       }
-      if (timeoutSignal.aborted) {
+      if (timeoutSignal.aborted || error instanceof APIConnectionTimeoutError) {
         throw new ProviderRequestError(`LLM request timed out after ${this.timeoutMs}ms`);
+      }
+      if (error instanceof APIUserAbortError) {
+        throw new ProviderRequestError("LLM request was aborted");
+      }
+      if (error instanceof APIError) {
+        throw new ProviderRequestError(error.message, error.status ?? null);
       }
       const detail = error instanceof Error ? error.message : "unknown network error";
       throw new ProviderRequestError(`LLM request failed: ${detail}`);
     }
 
-    const payload = parseJsonResponse(responseBody);
-    if (!response.ok) {
-      throw new ProviderRequestError(
-        providerErrorMessage(payload, `LLM request failed with HTTP ${response.status}`),
-        response.status
-      );
-    }
-
-    const completion = completionResponseSchema.safeParse(payload);
-    if (!completion.success) {
-      throw new ProviderRequestError("LLM response did not match the OpenAI-compatible format");
-    }
-
-    const choice = completion.data.choices[0];
+    const choice = completion.choices[0];
+    writeDebugLog(
+      this.debugLogging,
+      this.debugLogFile,
+      "llm.response.received",
+      requestId,
+      {
+        durationMs: Date.now() - startedAt,
+        responseId: completion.id,
+        finishReason: choice?.finish_reason ?? null,
+        contentLength: choice?.message.content?.length ?? 0,
+        content: choice?.message.content ?? null,
+        usage: completion.usage ?? null
+      }
+    );
     if (!choice) {
       throw new ProviderRequestError("LLM response did not contain a completion choice");
     }
@@ -234,12 +297,22 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
     const analysisPayload = parseJsonResponse(choice.message.content);
     const analysisEnvelope = analysisEnvelopeSchema.safeParse(analysisPayload);
     if (!analysisEnvelope.success) {
-      throw new ProviderRequestError("LLM JSON did not match the NihongoNote analysis schema");
+      const issue = analysisEnvelope.error.issues[0];
+      const detail = issue ? ` (${issue.path.join(".")}: ${issue.message})` : "";
+      throw new ProviderRequestError(
+        `LLM JSON did not match the NihongoNote analysis schema${detail}`
+      );
     }
 
     return {
       analyses: analysisEnvelope.data.analyses,
-      usage: toUsage(completion.data.usage)
+      usage: completion.usage
+        ? {
+            inputTokens: completion.usage.prompt_tokens ?? null,
+            outputTokens: completion.usage.completion_tokens ?? null,
+            totalTokens: completion.usage.total_tokens ?? null
+          }
+        : null
     };
   }
 }

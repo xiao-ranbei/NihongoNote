@@ -31,7 +31,11 @@ export function createProviderRegistry(config: AppConfig): ProviderRegistry {
       model: config.llmModel,
       temperature: config.llmTemperature,
       maxTokens: config.llmMaxTokens,
-      timeoutMs: config.llmTimeoutMs
+      timeoutMs: config.llmTimeoutMs,
+      thinkingType: config.llmThinkingType,
+      reasoningEffort: config.llmReasoningEffort,
+      debugLogging: config.llmDebugLogging,
+      debugLogFile: config.llmDebugLogFile
     });
   } else {
     throw new Error(`Unsupported LLM provider: ${config.llmProvider}`);

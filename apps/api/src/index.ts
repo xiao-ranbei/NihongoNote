@@ -13,6 +13,17 @@ try {
     host: appConfig.host,
     port: appConfig.port
   });
+  app.log.info({
+    provider: appConfig.llmProvider,
+    protocol: appConfig.llmProtocol,
+    model: appConfig.llmModel,
+    thinkingType: appConfig.llmThinkingType ?? null,
+    reasoningEffort: appConfig.llmReasoningEffort ?? null,
+    maxTokens: appConfig.llmMaxTokens,
+    timeoutMs: appConfig.llmTimeoutMs,
+    debugLogging: appConfig.llmDebugLogging,
+    debugLogFile: appConfig.llmDebugLogging ? appConfig.llmDebugLogFile : null
+  }, "LLM provider runtime configuration");
 } catch (error) {
   if (app) {
     app.log.error(error, "Unable to start NihongoNote API");
