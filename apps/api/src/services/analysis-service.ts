@@ -69,7 +69,10 @@ function contextFor(segment: Segment, allSegments: Segment[]): string[] {
 }
 
 export class AnalysisService {
-  private readonly runningDocuments = new Set<string>();
+  private readonly activeRuns = new Map<string, {
+    id: symbol;
+    controller: AbortController;
+  }>();
 
   public constructor(
     private readonly repository: DocumentRepository,
@@ -84,15 +87,26 @@ export class AnalysisService {
     }
 
     this.repository.markDocumentAnalyzing(documentId);
-    if (!this.runningDocuments.has(documentId)) {
-      this.runningDocuments.add(documentId);
-      void this.process(documentId);
+    if (!this.activeRuns.has(documentId)) {
+      const run = {
+        id: Symbol(documentId),
+        controller: new AbortController()
+      };
+      this.activeRuns.set(documentId, run);
+      void this.process(documentId, run);
     }
 
     return this.repository.getAnalysisProgress(documentId);
   }
 
   public retrySegment(segmentId: string): AnalysisProgress | undefined {
+    const segment = this.repository.getSegment(segmentId);
+    if (!segment) {
+      return undefined;
+    }
+    if (this.activeRuns.has(segment.documentId)) {
+      this.cancel(segment.documentId);
+    }
     const documentId = this.repository.queueSegmentRetry(segmentId);
     if (!documentId) {
       return undefined;
@@ -100,18 +114,50 @@ export class AnalysisService {
     return this.start(documentId);
   }
 
-  private async process(documentId: string): Promise<void> {
-    try {
-      const document = this.repository.getById(documentId);
-      if (!document) {
-        return;
-      }
+  public cancel(documentId: string): AnalysisProgress | undefined {
+    const progress = this.repository.getAnalysisProgress(documentId);
+    if (!progress) {
+      return undefined;
+    }
+    const run = this.activeRuns.get(documentId);
+    if (!run) {
+      return progress;
+    }
+    this.activeRuns.delete(documentId);
+    run.controller.abort(new DOMException("Analysis cancelled by user", "AbortError"));
+    return this.repository.markDocumentAnalysisCancelled(documentId);
+  }
 
-      const segments = this.repository.getSegmentsForAnalysis(documentId);
-      const pendingSegments = segments.filter((segment) => segment.status !== "completed");
-      for (const segment of pendingSegments) {
+  public cancelAll(): void {
+    for (const documentId of [...this.activeRuns.keys()]) {
+      this.cancel(documentId);
+    }
+  }
+
+  private isCurrent(
+    documentId: string,
+    run: { id: symbol; controller: AbortController }
+  ): boolean {
+    return this.activeRuns.get(documentId)?.id === run.id && !run.controller.signal.aborted;
+  }
+
+  private async process(
+    documentId: string,
+    run: { id: symbol; controller: AbortController }
+  ): Promise<void> {
+    try {
+      while (this.isCurrent(documentId, run)) {
+        const document = this.repository.getById(documentId);
+        if (!document) {
+          return;
+        }
+        const segments = this.repository.getSegmentsForAnalysis(documentId);
+        const segment = segments.find((candidate) => candidate.status === "queued");
+        if (!segment) {
+          break;
+        }
         if (!this.repository.markSegmentProcessing(segment.id)) {
-          throw new Error(`Segment disappeared before analysis: ${segment.id}`);
+          continue;
         }
 
         try {
@@ -120,10 +166,15 @@ export class AnalysisService {
             segments: [segment],
             tokenBoundaries,
             surroundingContext: contextFor(segment, segments),
+            contentType: document.contentType,
             targetLevel: document.targetLevel,
-            promptVersion: this.promptVersion
+            promptVersion: this.promptVersion,
+            signal: run.controller.signal
           });
 
+          if (!this.isCurrent(documentId, run)) {
+            return;
+          }
           if (result.analyses.length !== 1) {
             throw new Error(
               `LLM returned ${result.analyses.length} analyses for segment ${segment.id}; expected exactly one`
@@ -140,15 +191,24 @@ export class AnalysisService {
             result.usage
           );
         } catch (reason: unknown) {
+          if (!this.isCurrent(documentId, run)) {
+            return;
+          }
           this.repository.markSegmentFailed(segment.id, errorMessage(reason));
         }
       }
 
-      this.repository.finalizeDocumentAnalysis(documentId);
+      if (this.isCurrent(documentId, run)) {
+        this.repository.finalizeDocumentAnalysis(documentId);
+      }
     } catch (reason: unknown) {
-      this.repository.markDocumentAnalysisFailed(documentId, errorMessage(reason));
+      if (this.isCurrent(documentId, run)) {
+        this.repository.markDocumentAnalysisFailed(documentId, errorMessage(reason));
+      }
     } finally {
-      this.runningDocuments.delete(documentId);
+      if (this.activeRuns.get(documentId)?.id === run.id) {
+        this.activeRuns.delete(documentId);
+      }
     }
   }
 }

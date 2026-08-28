@@ -1,5 +1,10 @@
 export {
   apiErrorSchema,
+  analysisRevisionSchema,
+  contentBlockSchema,
+  contentTypeSchema,
+  contentTypeSourceSchema,
+  contentTypeSuggestionSchema,
   createDocumentInputSchema,
   documentDetailSchema,
   documentStatusSchema,
@@ -7,18 +12,25 @@ export {
   analysisProgressSchema,
   healthResponseSchema,
   segmentAnalysisSchema,
+  segmentAnalysisOverrideSchema,
   segmentSchema,
   segmentViewSchema,
   segmentStatusSchema,
   targetLevelSchema,
   tokenCategorySchema,
   tokenAnalysisSchema,
-  updateDocumentInputSchema
+  updateDocumentInputSchema,
+  updateSegmentInputSchema
 } from "./domain.js";
 
 export type {
   ApiError,
+  AnalysisRevision,
   AnalysisProgress,
+  ContentBlock,
+  ContentType,
+  ContentTypeSource,
+  ContentTypeSuggestion,
   CreateDocumentInput,
   DocumentDetail,
   DocumentStatus,
@@ -26,10 +38,13 @@ export type {
   HealthResponse,
   Segment,
   SegmentAnalysis,
+  SegmentAnalysisOverride,
   SegmentStatus,
   SegmentView,
   TargetLevel,
   TokenCategory,
   TokenAnalysis,
-  UpdateDocumentInput
+  TokenAnalysisOverride,
+  UpdateDocumentInput,
+  UpdateSegmentInput
 } from "./domain.js";

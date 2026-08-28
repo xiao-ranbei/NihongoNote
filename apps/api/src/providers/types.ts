@@ -1,4 +1,4 @@
-import type { Segment, SegmentAnalysis } from "@nihongonote/core";
+import type { ContentType, Segment, SegmentAnalysis } from "@nihongonote/core";
 
 import type { TokenBoundary } from "../tokenization.js";
 
@@ -8,8 +8,10 @@ export interface AnalysisRequest {
   segments: Segment[];
   tokenBoundaries: TokenBoundary[];
   surroundingContext: string[];
+  contentType: ContentType;
   targetLevel: string;
   promptVersion: string;
+  signal: AbortSignal;
 }
 
 export interface LlmUsage {

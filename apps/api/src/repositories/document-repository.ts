@@ -1,20 +1,32 @@
 import { randomUUID } from "node:crypto";
 
 import {
+  analysisRevisionSchema,
   analysisProgressSchema,
+  contentBlockSchema,
+  contentTypeSchema,
+  contentTypeSourceSchema,
+  contentTypeSuggestionSchema,
   documentDetailSchema,
   documentStatusSchema,
   documentSummarySchema,
   segmentAnalysisSchema,
+  segmentAnalysisOverrideSchema,
   segmentStatusSchema,
+  type AnalysisRevision,
   type AnalysisProgress,
+  type ContentBlock,
+  type ContentTypeSuggestion,
   type CreateDocumentInput,
   type DocumentDetail,
+  type DocumentStatus,
   type DocumentSummary,
   type Segment,
   type SegmentAnalysis,
+  type SegmentAnalysisOverride,
   type SegmentView,
-  type UpdateDocumentInput
+  type UpdateDocumentInput,
+  type UpdateSegmentInput
 } from "@nihongonote/core";
 
 import type { AppDatabase } from "../db/database.js";
@@ -26,6 +38,10 @@ interface DocumentRow {
   title: string;
   source_text: string;
   target_level: string;
+  content_type: string;
+  content_type_source: string;
+  content_type_suggestion_json: string;
+  content_blocks_json: string;
   status: string;
   created_at: string;
   updated_at: string;
@@ -35,6 +51,9 @@ interface DocumentSummaryRow {
   id: string;
   title: string;
   target_level: string;
+  content_type: string;
+  content_type_source: string;
+  content_type_suggestion_json: string;
   status: string;
   segment_count: number;
   completed_segment_count: number;
@@ -63,6 +82,14 @@ interface SegmentAnalysisRow {
   usage_json: string;
 }
 
+interface AnalysisRevisionRow {
+  segment_id: string;
+  revision: number;
+  override_json: string;
+  created_at: string;
+  updated_at: string;
+}
+
 interface ProgressRow {
   document_id: string;
   status: string;
@@ -78,6 +105,29 @@ function defaultTitle(sourceText: string): string {
   return firstLine?.slice(0, 80) || "未命名文章";
 }
 
+function suggestContentType(sourceText: string): ContentTypeSuggestion | null {
+  const nonEmptyLines = sourceText.split(/\r?\n/u).filter((line) => line.trim().length > 0);
+  const dialogueLines = nonEmptyLines.filter((line) => /^\s*[^：:\r\n]{1,40}[：:]/u.test(line));
+  if (dialogueLines.length >= 2 && dialogueLines.length / nonEmptyLines.length >= 0.5) {
+    return {
+      contentType: "dialogue",
+      confidence: 0.85,
+      reason: "多行内容使用了稳定的角色名前缀",
+      source: "heuristic"
+    };
+  }
+  const noteLines = nonEmptyLines.filter((line) => /^\s*(?:[-*・]|[0-9０-９]+[.)、])/u.test(line));
+  if (noteLines.length >= 2 && noteLines.length / nonEmptyLines.length >= 0.5) {
+    return {
+      contentType: "note",
+      confidence: 0.7,
+      reason: "多数行使用了项目符号或编号",
+      source: "heuristic"
+    };
+  }
+  return null;
+}
+
 function parseStoredAnalysis(row: SegmentAnalysisRow): SegmentAnalysis {
   let payload: unknown;
   try {
@@ -89,7 +139,62 @@ function parseStoredAnalysis(row: SegmentAnalysisRow): SegmentAnalysis {
   return segmentAnalysisSchema.parse(payload);
 }
 
-function toSegment(row: SegmentRow, analysis: SegmentAnalysis | null): SegmentView {
+function parseStoredJson<T>(
+  value: string,
+  label: string,
+  parse: (payload: unknown) => T
+): T {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(value) as unknown;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "unknown JSON parse error";
+    throw new Error(`Stored ${label} is invalid JSON: ${detail}`);
+  }
+  return parse(payload);
+}
+
+function parseRevision(row: AnalysisRevisionRow): AnalysisRevision {
+  return analysisRevisionSchema.parse({
+    revision: Number(row.revision),
+    override: parseStoredJson(
+      row.override_json,
+      `analysis revision for ${row.segment_id}`,
+      (payload) => segmentAnalysisOverrideSchema.parse(payload)
+    ),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  });
+}
+
+function applyOverride(
+  original: SegmentAnalysis,
+  override: SegmentAnalysisOverride
+): SegmentAnalysis {
+  const tokenOverrides = new Map((override.tokens ?? []).map((token) => [token.tokenId, token]));
+  const {
+    tokens: _tokens,
+    ...analysisFields
+  } = override;
+  return segmentAnalysisSchema.parse({
+    ...original,
+    ...analysisFields,
+    tokens: original.tokens.map((token) => {
+      const tokenOverride = tokenOverrides.get(token.tokenId);
+      if (!tokenOverride) {
+        return token;
+      }
+      const { tokenId: _tokenId, ...fields } = tokenOverride;
+      return { ...token, ...fields };
+    })
+  });
+}
+
+function toSegment(
+  row: SegmentRow,
+  originalAnalysis: SegmentAnalysis | null,
+  userRevision: AnalysisRevision | null
+): SegmentView {
   return {
     id: row.id,
     documentId: row.document_id,
@@ -100,7 +205,11 @@ function toSegment(row: SegmentRow, analysis: SegmentAnalysis | null): SegmentVi
     speaker: row.speaker,
     status: segmentStatusSchema.parse(row.status),
     errorMessage: row.error_message,
-    analysis
+    analysis: originalAnalysis && userRevision
+      ? applyOverride(originalAnalysis, userRevision.override)
+      : originalAnalysis,
+    originalAnalysis,
+    userRevision
   };
 }
 
@@ -119,45 +228,50 @@ function toProgress(row: ProgressRow): AnalysisProgress {
 export class DocumentRepository {
   public constructor(private readonly database: AppDatabase) {}
 
-  public list(search?: string): DocumentSummary[] {
+  public list(search?: string, status?: DocumentStatus): DocumentSummary[] {
     const normalizedSearch = search?.trim();
-    const rows = normalizedSearch
-      ? this.database.all<DocumentSummaryRow>(`
-          SELECT
-            d.id,
-            d.title,
-            d.target_level,
-            d.status,
-            COUNT(s.id) AS segment_count,
-            COALESCE(SUM(CASE WHEN s.status = 'completed' THEN 1 ELSE 0 END), 0) AS completed_segment_count,
-            d.created_at,
-            d.updated_at
-          FROM documents d
-          LEFT JOIN segments s ON s.document_id = d.id
-          WHERE d.title LIKE ? OR d.source_text LIKE ?
-          GROUP BY d.id
-          ORDER BY d.updated_at DESC
-        `, [`%${normalizedSearch}%`, `%${normalizedSearch}%`])
-      : this.database.all<DocumentSummaryRow>(`
-          SELECT
-            d.id,
-            d.title,
-            d.target_level,
-            d.status,
-            COUNT(s.id) AS segment_count,
-            COALESCE(SUM(CASE WHEN s.status = 'completed' THEN 1 ELSE 0 END), 0) AS completed_segment_count,
-            d.created_at,
-            d.updated_at
-          FROM documents d
-          LEFT JOIN segments s ON s.document_id = d.id
-          GROUP BY d.id
-          ORDER BY d.updated_at DESC
-        `);
+    const conditions: string[] = [];
+    const params: string[] = [];
+    if (normalizedSearch) {
+      conditions.push("(d.title LIKE ? OR d.source_text LIKE ?)");
+      params.push(`%${normalizedSearch}%`, `%${normalizedSearch}%`);
+    }
+    if (status) {
+      conditions.push("d.status = ?");
+      params.push(status);
+    }
+    const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    const rows = this.database.all<DocumentSummaryRow>(`
+      SELECT
+        d.id,
+        d.title,
+        d.target_level,
+        d.content_type,
+        d.content_type_source,
+        d.content_type_suggestion_json,
+        d.status,
+        COUNT(s.id) AS segment_count,
+        COALESCE(SUM(CASE WHEN s.status = 'completed' THEN 1 ELSE 0 END), 0) AS completed_segment_count,
+        d.created_at,
+        d.updated_at
+      FROM documents d
+      LEFT JOIN segments s ON s.document_id = d.id
+      ${where}
+      GROUP BY d.id
+      ORDER BY d.updated_at DESC
+    `, params);
 
     return rows.map((row) => documentSummarySchema.parse({
       id: row.id,
       title: row.title,
       targetLevel: row.target_level,
+      contentType: contentTypeSchema.parse(row.content_type),
+      contentTypeSource: contentTypeSourceSchema.parse(row.content_type_source),
+      contentTypeSuggestion: parseStoredJson<ContentTypeSuggestion | null>(
+        row.content_type_suggestion_json,
+        `content type suggestion for ${row.id}`,
+        (payload) => contentTypeSuggestionSchema.nullable().parse(payload)
+      ),
       status: documentStatusSchema.parse(row.status),
       segmentCount: Number(row.segment_count),
       completedSegmentCount: Number(row.completed_segment_count),
@@ -168,7 +282,9 @@ export class DocumentRepository {
 
   public getById(documentId: string): DocumentDetail | undefined {
     const row = this.database.get<DocumentRow>(`
-      SELECT id, title, source_text, target_level, status, created_at, updated_at
+      SELECT
+        id, title, source_text, target_level, content_type, content_type_source,
+        content_type_suggestion_json, content_blocks_json, status, created_at, updated_at
       FROM documents
       WHERE id = ?
     `, [documentId]);
@@ -193,18 +309,46 @@ export class DocumentRepository {
       analysisRow.segment_id,
       parseStoredAnalysis(analysisRow)
     ]));
+    const revisionRows = this.database.all<AnalysisRevisionRow>(`
+      SELECT ar.segment_id, ar.revision, ar.override_json, ar.created_at, ar.updated_at
+      FROM analysis_revisions ar
+      INNER JOIN segments s ON s.id = ar.segment_id
+      WHERE s.document_id = ?
+    `, [documentId]);
+    const revisions = new Map(revisionRows.map((revisionRow) => [
+      revisionRow.segment_id,
+      parseRevision(revisionRow)
+    ]));
+    const contentTypeSuggestion = parseStoredJson<ContentTypeSuggestion | null>(
+      row.content_type_suggestion_json,
+      `content type suggestion for ${documentId}`,
+      (payload) => contentTypeSuggestionSchema.nullable().parse(payload)
+    );
+    const contentBlocks = parseStoredJson<ContentBlock[]>(
+      row.content_blocks_json,
+      `content blocks for ${documentId}`,
+      (payload) => contentBlockSchema.array().parse(payload)
+    );
 
     return documentDetailSchema.parse({
       id: row.id,
       title: row.title,
       sourceText: row.source_text,
       targetLevel: row.target_level,
+      contentType: contentTypeSchema.parse(row.content_type),
+      contentTypeSource: contentTypeSourceSchema.parse(row.content_type_source),
+      contentTypeSuggestion,
+      contentBlocks,
       status: documentStatusSchema.parse(row.status),
       segmentCount: segmentRows.length,
       completedSegmentCount: segmentRows.filter((segment) => segment.status === "completed").length,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
-      segments: segmentRows.map((segment) => toSegment(segment, analyses.get(segment.id) ?? null))
+      segments: segmentRows.map((segment) => toSegment(
+        segment,
+        analyses.get(segment.id) ?? null,
+        revisions.get(segment.id) ?? null
+      ))
     });
   }
 
@@ -232,7 +376,38 @@ export class DocumentRepository {
     if (!document) {
       return [];
     }
-    return document.segments.map(({ analysis: _analysis, ...segment }) => segment);
+    return document.segments.map(({
+      analysis: _analysis,
+      originalAnalysis: _originalAnalysis,
+      userRevision: _userRevision,
+      ...segment
+    }) => segment);
+  }
+
+  public getSegment(segmentId: string): SegmentView | undefined {
+    const row = this.database.get<SegmentRow>(`
+      SELECT id, document_id, segment_index, text, start_offset, end_offset, speaker, status, error_message
+      FROM segments
+      WHERE id = ?
+    `, [segmentId]);
+    if (!row) {
+      return undefined;
+    }
+    const analysisRow = this.database.get<SegmentAnalysisRow>(`
+      SELECT segment_id, provider, model, prompt_version, result_json, usage_json
+      FROM segment_analyses
+      WHERE segment_id = ?
+    `, [segmentId]);
+    const revisionRow = this.database.get<AnalysisRevisionRow>(`
+      SELECT segment_id, revision, override_json, created_at, updated_at
+      FROM analysis_revisions
+      WHERE segment_id = ?
+    `, [segmentId]);
+    return toSegment(
+      row,
+      analysisRow ? parseStoredAnalysis(analysisRow) : null,
+      revisionRow ? parseRevision(revisionRow) : null
+    );
   }
 
   public create(input: CreateDocumentInput): DocumentDetail {
@@ -240,16 +415,34 @@ export class DocumentRepository {
     const now = new Date().toISOString();
     const title = input.title ?? defaultTitle(input.sourceText);
     const segments = splitIntoSegments(input.sourceText, documentId);
+    const contentTypeSuggestion = suggestContentType(input.sourceText);
+    const contentBlocks: ContentBlock[] = [{
+      id: `${documentId}:block:0`,
+      index: 0,
+      kind: contentTypeSuggestion?.contentType === "dialogue" ? "dialogue" : "body",
+      startOffset: 0,
+      endOffset: input.sourceText.length,
+      analysisEnabled: true,
+      detectedType: contentTypeSuggestion?.contentType ?? null,
+      selectedType: null
+    }];
 
     this.database.transaction(() => {
       this.database.run(`
-        INSERT INTO documents (id, title, source_text, target_level, status, created_at, updated_at)
-        VALUES (?, ?, ?, ?, 'draft', ?, ?)
+        INSERT INTO documents (
+          id, title, source_text, target_level, content_type, content_type_source,
+          content_type_suggestion_json, content_blocks_json, status, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)
       `, [
         documentId,
         title,
         input.sourceText,
         input.targetLevel,
+        input.contentType ?? "article",
+        input.contentType === undefined ? "default" : "user",
+        JSON.stringify(contentTypeSuggestion),
+        JSON.stringify(contentBlocks),
         now,
         now
       ]);
@@ -292,14 +485,91 @@ export class DocumentRepository {
     const now = new Date().toISOString();
     const title = input.title ?? existing.title;
     const targetLevel = input.targetLevel ?? existing.targetLevel;
+    const contentType = input.contentType ?? existing.contentType;
+    const contentTypeSource = input.contentType === undefined ? existing.contentTypeSource : "user";
 
     this.database.run(`
       UPDATE documents
-      SET title = ?, target_level = ?, updated_at = ?
+      SET title = ?, target_level = ?, content_type = ?, content_type_source = ?, updated_at = ?
       WHERE id = ?
-    `, [title, targetLevel, now, documentId]);
+    `, [title, targetLevel, contentType, contentTypeSource, now, documentId]);
 
     return this.getById(documentId);
+  }
+
+  public updateSegment(segmentId: string, input: UpdateSegmentInput): SegmentView | undefined {
+    const segment = this.getSegment(segmentId);
+    if (!segment) {
+      return undefined;
+    }
+    const speaker = input.speaker === undefined ? segment.speaker : input.speaker;
+    const now = new Date().toISOString();
+    this.database.transaction(() => {
+      this.database.run(`
+        UPDATE segments
+        SET speaker = ?, updated_at = ?
+        WHERE id = ?
+      `, [speaker, now, segmentId]);
+      this.database.run(`
+        UPDATE documents SET updated_at = ? WHERE id = ?
+      `, [now, segment.documentId]);
+    });
+    return this.getSegment(segmentId);
+  }
+
+  public saveAnalysisOverride(
+    segmentId: string,
+    input: SegmentAnalysisOverride
+  ): SegmentView | undefined {
+    const segment = this.getSegment(segmentId);
+    if (!segment) {
+      return undefined;
+    }
+    if (!segment.originalAnalysis) {
+      throw new Error("ANALYSIS_NOT_FOUND");
+    }
+
+    const validTokenIds = new Set(segment.originalAnalysis.tokens.map((token) => token.tokenId));
+    for (const token of input.tokens ?? []) {
+      if (!validTokenIds.has(token.tokenId)) {
+        throw new Error(`UNKNOWN_TOKEN_ID:${token.tokenId}`);
+      }
+    }
+
+    const existingOverride = segment.userRevision?.override;
+    const tokenOverrides = new Map(
+      (existingOverride?.tokens ?? []).map((token) => [token.tokenId, token])
+    );
+    for (const token of input.tokens ?? []) {
+      tokenOverrides.set(token.tokenId, {
+        ...tokenOverrides.get(token.tokenId),
+        ...token
+      });
+    }
+    const mergedOverride = segmentAnalysisOverrideSchema.parse({
+      ...existingOverride,
+      ...input,
+      tokens: tokenOverrides.size > 0 ? [...tokenOverrides.values()] : undefined
+    });
+    applyOverride(segment.originalAnalysis, mergedOverride);
+
+    const now = new Date().toISOString();
+    this.database.transaction(() => {
+      this.database.run(`
+        INSERT INTO analysis_revisions (
+          segment_id, revision, override_json, created_at, updated_at
+        )
+        VALUES (?, 1, ?, ?, ?)
+        ON CONFLICT(segment_id) DO UPDATE SET
+          revision = analysis_revisions.revision + 1,
+          override_json = excluded.override_json,
+          updated_at = excluded.updated_at
+      `, [segmentId, JSON.stringify(mergedOverride), now, now]);
+      this.database.run(`
+        UPDATE documents SET updated_at = ? WHERE id = ?
+      `, [now, segment.documentId]);
+    });
+    return this.getSegment(segmentId);
   }
 
   public markDocumentAnalyzing(documentId: string): boolean {
@@ -308,6 +578,26 @@ export class DocumentRepository {
       SET status = 'analyzing', updated_at = ?
       WHERE id = ?
     `, [new Date().toISOString(), documentId]) > 0;
+  }
+
+  public markDocumentAnalysisCancelled(documentId: string): AnalysisProgress | undefined {
+    if (!this.getAnalysisProgress(documentId)) {
+      return undefined;
+    }
+    const now = new Date().toISOString();
+    this.database.transaction(() => {
+      this.database.run(`
+        UPDATE segments
+        SET status = 'queued', error_message = NULL, updated_at = ?
+        WHERE document_id = ? AND status = 'processing'
+      `, [now, documentId]);
+      this.database.run(`
+        UPDATE documents
+        SET status = 'draft', updated_at = ?
+        WHERE id = ?
+      `, [now, documentId]);
+    });
+    return this.getAnalysisProgress(documentId);
   }
 
   public recoverInterruptedAnalyses(): void {
@@ -336,7 +626,7 @@ export class DocumentRepository {
     return this.database.run(`
       UPDATE segments
       SET status = 'processing', error_message = NULL, updated_at = ?
-      WHERE id = ?
+      WHERE id = ? AND status = 'queued'
     `, [new Date().toISOString(), segmentId]) > 0;
   }
 
@@ -345,7 +635,7 @@ export class DocumentRepository {
     return this.database.run(`
       UPDATE segments
       SET status = 'failed', error_message = ?, updated_at = ?
-      WHERE id = ?
+      WHERE id = ? AND status = 'processing'
     `, [normalizedMessage, new Date().toISOString(), segmentId]) > 0;
   }
 

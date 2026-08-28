@@ -116,6 +116,18 @@ function migrateDatabase(database: SqlJsDatabase): void {
   if (!hasColumn(database, "segment_analyses", "usage_json")) {
     database.run("ALTER TABLE segment_analyses ADD COLUMN usage_json TEXT NOT NULL DEFAULT 'null'");
   }
+  if (!hasColumn(database, "documents", "content_type")) {
+    database.run("ALTER TABLE documents ADD COLUMN content_type TEXT NOT NULL DEFAULT 'article'");
+  }
+  if (!hasColumn(database, "documents", "content_type_source")) {
+    database.run("ALTER TABLE documents ADD COLUMN content_type_source TEXT NOT NULL DEFAULT 'default'");
+  }
+  if (!hasColumn(database, "documents", "content_type_suggestion_json")) {
+    database.run("ALTER TABLE documents ADD COLUMN content_type_suggestion_json TEXT NOT NULL DEFAULT 'null'");
+  }
+  if (!hasColumn(database, "documents", "content_blocks_json")) {
+    database.run("ALTER TABLE documents ADD COLUMN content_blocks_json TEXT NOT NULL DEFAULT '[]'");
+  }
 }
 
 export async function createDatabase(databaseFile: string): Promise<AppDatabase> {

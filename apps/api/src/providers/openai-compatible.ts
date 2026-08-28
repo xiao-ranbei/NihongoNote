@@ -65,6 +65,8 @@ each provided boundary, preserving tokenId, startOffset, endOffset, and surface 
 Token offsets are JavaScript UTF-16 offsets relative to that segment's text. Use null for a field that
 is not applicable or cannot be determined.
 Do not invent context. If multiple interpretations are reasonable, say so in uncertaintyNote.
+contentType is the user's selected document type. Treat it as authoritative; do not replace it with an inferred type.
+targetLevel controls explanation wording only. It must never change token boundaries, lexical facts, or grammar facts.
 The word JSON must be followed: do not wrap it in Markdown fences.`;
 
 function endpointFor(baseUrl: string): string {
@@ -120,6 +122,7 @@ function requestPayload(request: AnalysisRequest, model: string, temperature: nu
       {
         role: "user",
         content: JSON.stringify({
+          contentType: request.contentType,
           targetLevel: request.targetLevel,
           surroundingContext: request.surroundingContext,
           segments: request.segments.map((segment) => ({
@@ -173,7 +176,11 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
       );
     }
 
+    request.signal.throwIfAborted();
+    const timeoutSignal = AbortSignal.timeout(this.timeoutMs);
+    const signal = AbortSignal.any([request.signal, timeoutSignal]);
     let response: Response;
+    let responseBody: string;
     try {
       response = await fetch(this.endpoint, {
         method: "POST",
@@ -182,14 +189,22 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
           "authorization": `Bearer ${this.apiKey}`
         },
         body: JSON.stringify(requestPayload(request, this.model, this.temperature, this.maxTokens)),
-        signal: AbortSignal.timeout(this.timeoutMs)
+        signal
       });
+      responseBody = await response.text();
     } catch (error) {
+      if (request.signal.aborted) {
+        throw request.signal.reason instanceof Error
+          ? request.signal.reason
+          : new DOMException("Analysis cancelled", "AbortError");
+      }
+      if (timeoutSignal.aborted) {
+        throw new ProviderRequestError(`LLM request timed out after ${this.timeoutMs}ms`);
+      }
       const detail = error instanceof Error ? error.message : "unknown network error";
       throw new ProviderRequestError(`LLM request failed: ${detail}`);
     }
 
-    const responseBody = await response.text();
     const payload = parseJsonResponse(responseBody);
     if (!response.ok) {
       throw new ProviderRequestError(

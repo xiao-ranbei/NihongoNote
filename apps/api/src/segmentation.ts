@@ -27,7 +27,12 @@ function collectTurns(sourceText: string): Turn[] {
     const lineEnd = lineStart + lineText.length;
     const speakerMatch = speakerPrefixPattern.exec(lineText);
 
-    if (speakerMatch) {
+    if (lineText.trim().length === 0) {
+      if (currentTurn && currentTurn.startOffset < currentTurn.endOffset) {
+        turns.push(currentTurn);
+      }
+      currentTurn = undefined;
+    } else if (speakerMatch) {
       if (currentTurn && currentTurn.startOffset < currentTurn.endOffset) {
         turns.push(currentTurn);
       }
@@ -104,6 +109,30 @@ function trimSpan(sourceText: string, span: Span): Span | undefined {
   return startOffset < endOffset ? { startOffset, endOffset } : undefined;
 }
 
+export function assertSegmentsMatchSource(
+  sourceText: string,
+  documentId: string,
+  segments: Segment[]
+): void {
+  let previousEndOffset = 0;
+  for (const [index, segment] of segments.entries()) {
+    if (segment.documentId !== documentId
+      || segment.index !== index
+      || segment.id !== `${documentId}:segment:${index}`) {
+      throw new Error(`Segment ${index} has unstable identity metadata`);
+    }
+    if (segment.startOffset < previousEndOffset
+      || segment.endOffset <= segment.startOffset
+      || segment.endOffset > sourceText.length) {
+      throw new Error(`Segment ${segment.id} has invalid UTF-16 offsets`);
+    }
+    if (sourceText.slice(segment.startOffset, segment.endOffset) !== segment.text) {
+      throw new Error(`Segment ${segment.id} text does not match its source range`);
+    }
+    previousEndOffset = segment.endOffset;
+  }
+}
+
 export function splitIntoSegments(sourceText: string, documentId: string): Segment[] {
   const segments: Segment[] = [];
   let segmentIndex = 0;
@@ -130,5 +159,6 @@ export function splitIntoSegments(sourceText: string, documentId: string): Segme
     }
   }
 
+  assertSegmentsMatchSource(sourceText, documentId, segments);
   return segments;
 }
