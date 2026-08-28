@@ -4,6 +4,9 @@
 **提示词版本**：`analysis-v1`
 **首个 provider**：DeepSeek OpenAI-compatible API
 **当前模型默认值**：`deepseek-v4-flash`
+**当前推理默认值**：`thinking=enabled`、`reasoning_effort=medium`
+**当前输出上限**：`max_tokens=12000`
+**当前批量默认值**：`LLM_BATCH_SIZE=3`、`LLM_BATCH_CONCURRENCY=2`
 
 ## 一、提示词在哪里
 
@@ -29,6 +32,9 @@ new OpenAI({
 client.chat.completions.create(requestBody, { signal })
 ```
 
+分析服务会把多个待分析 segment 合并为受控 batch；短对话默认可以在一个请求中完成，而长文按
+`LLM_BATCH_SIZE` 分批，并以 `LLM_BATCH_CONCURRENCY` 控制同时运行的 batch 数量，避免为每个句子重复支付固定 prompt 和推理开销。
+
 发送到 DeepSeek 的请求包含：
 
 ```text
@@ -46,10 +52,13 @@ max_tokens
 response_format: { type: "json_object" }
 thinking: { type: "enabled" | "disabled" }
 reasoning_effort
-stream: false
+stream: true
+stream_options: { include_usage: true }
 ```
 
-当 `thinking.type=enabled` 时，不发送 `temperature`；关闭 thinking 时才发送配置中的温度。这与 DeepSeek 当前推理模型示例的请求形式保持一致。
+当 `thinking.type=enabled` 时，不发送 `temperature`；关闭 thinking 时才发送配置中的温度。这与 DeepSeek 当前推理模型示例的请求形式保持一致。SDK
+返回的 stream 会逐块拼接 `delta.content`，直到收到完整 JSON 和 finish reason；usage 通过
+`stream_options.include_usage` 读取。
 
 ## 三、system prompt 的约束
 
@@ -88,9 +97,12 @@ provider 先检查 SDK 返回的 completion：
 
 ## 五、当前性能边界
 
-当前分析服务按句段串行调用 provider，每个句段单独请求一次。这样可以独立保存成功结果和重试失败句段，但长对话总耗时约为各句段请求耗时之和。
+当前分析服务按受控 batch 调用 provider；一个 batch 包含多个 segment，并在完整流结束后分别校验和保存每个结果。
+batch 内仍保持稳定 ID 和独立失败状态，后续重试只重新提交失败 segment 所在的 batch。
 
-`thinking=enabled` 和较高的 `reasoning_effort` 会增加推理时间；当前配置允许通过 `.env` 调整模型、推理等级、`max_tokens` 和 timeout。OpenAI SDK 自动重试已关闭，避免隐藏的重复请求和额外费用。
+当前默认使用 `thinking=enabled`、`reasoning_effort=medium` 和 `max_tokens=12000`；配置允许通过 `.env`
+调整模型、推理等级、batch 大小、输出上限和 timeout。OpenAI SDK 自动重试已关闭，避免隐藏的重复请求和额外费用。
+流式响应主要改善首字节和进度体验；总计算量仍由模型推理 token 和 batch 内容决定。
 
 ## 六、开发者调试日志
 
@@ -104,8 +116,10 @@ LLM_DEBUG_LOG_FILE=./data/llm-debug.jsonl
 日志每次追加 JSONL 事件，包含：
 
 - endpoint、provider、protocol、model；
-- 完整 `body`，包括 `messages`、`tokenBoundaries`、`response_format`、`thinking` 和 `reasoning_effort`；
+- 完整 `body`，包括 `messages`、batch segment IDs、`tokenBoundaries`、`response_format`、`thinking`、
+  `reasoning_effort`、`stream` 和 `stream_options`；
 - request ID、耗时、finish reason、响应内容、usage；
+- 流式过程中的 chunk 数量和累计 content 长度；
 - 失败时的错误名称、错误消息和 HTTP 状态。
 
 Authorization header 和 API key 永远不会写入。因为 body 和 messages 包含原文，排查完成后应关闭日志并删除 `data/llm-debug.jsonl`。

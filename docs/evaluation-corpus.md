@@ -23,7 +23,7 @@
 | `business-requirements-interview-01` | 双人/多人商务对话 | IT 化需求访谈 | 商务敬语、需求澄清、复述确认、时间量化、角色标注 |
 | `business-requirements-confirmation-01` | 双人商务对话 | 需求确认和范围决策 | 敬语、方案说明、让步与限制、推荐语气、确认和承诺 |
 
-## 2026-08-28 真实 DeepSeek 单段验证记录
+## 2026-08-28 真实 DeepSeek 单段验证记录（batch/stream 优化前基线）
 
 本次验证使用样本 1 开头李的第一段发言，原文保持用户提供版本：
 
@@ -34,12 +34,12 @@
 
 - **请求方式**：官方 OpenAI SDK 的 `chat.completions.create()`；
 - **provider/model**：DeepSeek OpenAI-compatible / `deepseek-v4-flash`；
-- **推理参数**：`thinking.type=enabled`、`reasoning_effort=high`；
+- **推理参数**：`thinking.type=enabled`、`reasoning_effort=high`（优化前配置）；
 - **结构化输出**：`response_format.type=json_object`，返回结果通过 segment/token schema 和本地 UTF-16 边界校验；
 - **分段结果**：由于原文包含三个句末标点，服务端生成 3 个 segment，而不是 1 个 segment；
 - **结果**：3/3 segment 成功，`finish_reason=stop`，均已保存；
-- **耗时**：约 76.7 秒、64.3 秒、166.1 秒，当前按 segment 串行调用；
-- **观察**：当前结果证明 API、提示词、SDK 和 schema 链路可用，但不能替代完整样本的语言质量、费用和长文回归。
+- **耗时**：约 76.7 秒、64.3 秒、166.1 秒，当时按 segment 串行调用；
+- **观察**：该记录证明 API、提示词、SDK 和 schema 链路可用，同时作为后续 `medium + 12000 + batch + stream` 优化的性能基线；不能替代完整样本的语言质量、费用和长文回归。
 
 本次实际请求和响应可在本机 `apps/api/data/llm-debug.jsonl` 查看；日志包含原文，排查完成后应关闭 `LLM_DEBUG_LOGGING` 并删除日志。
 

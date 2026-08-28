@@ -54,6 +54,7 @@ flowchart LR
 - 后续的区块、分句和标注范围修正；
 - 分析进度、失败重试和错误提示；
 - 分析取消：中止当前云端请求并停止后续请求，保留已完成结果；
+- 将多个短句合并为受控 batch，并以流式响应逐步接收 provider 输出；使用 batch size 和并发上限控制请求压力；
 - 可折叠学习库、历史列表、搜索和分析状态筛选；内容类型筛选后续加入。
 
 前端不得：
@@ -108,10 +109,10 @@ GET    /api/audio/:audioId
 1. **输入规范化**：保留原文、换行和标点，生成文档版本。
 2. **区块和句子切分**：空行划分独立段落/区块；再按标题/注释候选、日语标点和对话标记生成稳定的 block/segment ID，句末标点属于句子范围。普通单换行只作为保留的排版空白，不自动创建新的段落或句子；说话人标签保留在原文中但单独存储，不进入日语 token 或 AI 分析；保留用户对区块类型和分析开关的覆盖。
 3. **本地 token 边界**：保存后自动使用确定性日语分词取得 surface 和字符偏移，不产生云端调用；用户启动深度分析后，模型只补充原形、读音、词性、词义和语法字段。
-4. **分块**：按段落和 token/字符上限组合请求；每块携带有限的前后文。
+4. **分块**：按段落、token/字符上限和 `LLM_BATCH_SIZE` 组合多个 segment 请求，并以 `LLM_BATCH_CONCURRENCY` 限制并发；每块携带有限的前后文。
 5. **结构化生成**：用户启动深度分析后，先生成与目标等级无关的 `CanonicalAnalysis`；P1 MVP 先使用其中的句子和 token 事实，等级化教学表达由独立的 `LevelExplanation` 生成。要求模型只返回版本化 JSON，不让前端依赖 Markdown。
 6. **schema 校验**：校验 block/segment ID、token 范围、跨 token 标注范围和必填字段；基础事实和等级表达都必须通过对应 schema，失败则标记为失败并显示原因。
-7. **落盘**：每个 segment 独立保存 canonical 结果；等级表达按 `canonicalAnalysisId + targetLevel + explanationVersion` 保存或缓存。支持增量展示、取消当前云端请求和断点续跑。
+7. **落盘**：每个 segment 独立保存 canonical 结果；等级表达按 `canonicalAnalysisId + targetLevel + explanationVersion` 保存或缓存。batch 流结束后逐 segment 校验并保存，支持流式接收、取消当前云端请求和断点续跑。
 8. **人工修正入口**：首版允许修正标题、角色和解析字段；后续再开放区块、分句和标注范围修正。修正不应覆盖原始模型响应，并区分事实修正与表达修正。
 
 ### 结构化输出要求
@@ -267,8 +268,10 @@ P1 使用官方 OpenAI SDK 的 `chat.completions.create()`，通过 `baseURL: ht
 `response_format: { type: "json_object" }`；DeepSeek 推理配置还包括 `thinking` 和
 `reasoning_effort`。system 或 user prompt 必须明确包含 JSON 输出要求和示例。
 
-当前默认的 DeepSeek 配置是 `deepseek-v4-flash`、`thinking.type=enabled` 和
-`reasoning_effort=high`；具体模型和参数通过环境变量覆盖。OpenAI SDK 的自动重试显式关闭，
+当前默认的 DeepSeek 配置是 `deepseek-v4-flash`、`thinking.type=enabled`、
+`reasoning_effort=medium`、`max_tokens=12000`、`LLM_BATCH_SIZE=3` 和
+`LLM_BATCH_CONCURRENCY=2`；具体模型、batch 大小和参数通过环境变量覆盖。
+OpenAI SDK 的自动重试显式关闭，
 避免一次分析因 SDK 重试产生重复请求、重复费用或额外等待。
 
 适配器必须显式处理：
@@ -282,17 +285,16 @@ P1 使用官方 OpenAI SDK 的 `chat.completions.create()`，通过 `baseURL: ht
 - provider 返回的 token 边界与本地 token 边界不一致。
 
 DeepSeek 官方 JSON Output 说明还提示可能出现空内容或截断，因此不能把 HTTP 成功直接当作分析成功。
-当前模板将 `LLM_MAX_TOKENS` 默认设为 `32000`，长句仍应根据实际响应和 provider 上限调整；API 中途重启后，启动恢复逻辑会把 `processing` 句段重新置为 `queued`，避免任务永久卡住。
+当前模板将 `LLM_MAX_TOKENS` 默认设为 `12000`，长句仍应根据实际响应和 provider 上限调整；API 中途重启后，启动恢复逻辑会把 `processing` 句段重新置为 `queued`，避免任务永久卡住。
 
-分析服务当前按句段串行调用 provider，以便独立保存成功结果和重试失败句段；因此长对话的总耗时约为
-各句段请求耗时之和。启用 `LLM_DEBUG_LOGGING=true` 后，服务会把每次调用的实际请求体、响应内容、
-耗时和错误追加到默认数据目录的 `llm-debug.jsonl`，但不写入 Authorization header 或 API key。
+分析服务当前按受控 batch 调用 provider，并使用 `stream=true` 逐块接收输出；batch 完成后独立保存各 segment
+结果，失败 segment 可单独重试。启用 `LLM_DEBUG_LOGGING=true` 后，服务会把每次 batch 调用的实际请求体、
+响应内容、chunk 信息、耗时和错误追加到默认数据目录的 `llm-debug.jsonl`，但不写入 Authorization header 或 API key。
 调试日志会包含原文，排查完成后应关闭开关并删除日志。
 
-2026-08-28 已用真实 DeepSeek key 验证一段商务发言：原文包含三个句末标点，因此拆成
-3 个 segment；`deepseek-v4-flash`、`thinking=enabled`、`reasoning_effort=high` 下 3/3
-返回 `finish_reason=stop` 并通过本地 schema 校验。三次串行调用耗时约 76.7 秒、64.3 秒和
-166.1 秒；这说明当前延迟主要来自推理型模型的生成时间与逐句串行策略，而不是前端等待或重试。
+2026-08-28 的真实 DeepSeek 单段验证属于 batch/stream 优化前基线：原文包含三个句末标点，因此拆成
+3 个 segment；当时使用 `reasoning_effort=high`，三次串行调用耗时约 76.7 秒、64.3 秒和 166.1 秒。
+优化后的回归应使用 `reasoning_effort=medium`、`max_tokens=12000`、batch 和 stream 重新记录。
 
 #### Anthropic-compatible 适配器（后续实现）
 

@@ -74,7 +74,7 @@ DeepSeek OpenAI-compatible adapter 和分析 API 已经落地：
 - [分析服务](../apps/api/src/services/analysis-service.ts)负责句段任务、上下文、原文 ID/offset 校验、保存和重试；
 - [分析路由](../apps/api/src/routes/analysis.ts)提供启动、进度和失败句段重试。
 
-默认仍是 `LLM_PROVIDER=disabled`。启用 DeepSeek 时，需要在 `apps/api/.env` 设置 `LLM_PROVIDER=deepseek` 和 `LLM_API_KEY`；当前默认模型为 `deepseek-v4-flash`，并按官方示例支持 `thinking` 和 `reasoning_effort`。开发者可以显式开启 `LLM_DEBUG_LOGGING` 查看脱敏请求体；已完成一段真实商务发言的 3 个句子连通性验证，完整质量/费用回归和 Anthropic-compatible adapter 仍是后续工作。
+默认仍是 `LLM_PROVIDER=disabled`。启用 DeepSeek 时，需要在 `apps/api/.env` 设置 `LLM_PROVIDER=deepseek` 和 `LLM_API_KEY`；当前默认模型为 `deepseek-v4-flash`，并按官方示例支持 `thinking=enabled` 和 `reasoning_effort=medium`。短句通过受控 batch 合并，并使用 stream 接收响应；开发者可以显式开启 `LLM_DEBUG_LOGGING` 查看脱敏请求体。已完成一段真实商务发言的 3 个句子连通性验证，完整质量/费用回归和 Anthropic-compatible adapter 仍是后续工作。
 
 当前提示词不是独立配置文件，而是集中在
 [LLM 提示词与请求协议](llm-prompt.md)说明的

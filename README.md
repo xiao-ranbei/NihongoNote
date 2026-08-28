@@ -67,16 +67,21 @@ LLM_PROVIDER=deepseek
 LLM_PROTOCOL=openai
 LLM_BASE_URL=https://api.deepseek.com
 LLM_MODEL=deepseek-v4-flash
+LLM_MAX_TOKENS=12000
+LLM_TIMEOUT_MS=300000
 LLM_THINKING_TYPE=enabled
-LLM_REASONING_EFFORT=high
+LLM_REASONING_EFFORT=medium
 LLM_DEBUG_LOGGING=false
 LLM_DEBUG_LOG_FILE=./data/llm-debug.jsonl
+LLM_BATCH_SIZE=3
+LLM_BATCH_CONCURRENCY=2
 LLM_API_KEY=your-api-key
 ```
 
 保存文章后，点击“开始 AI 分析”。分析任务会按句段执行，结果通过 JSON schema 校验后保存；失败句段可以单独重试，取消时会中止当前云端请求并停止后续句段。
-推理型模型可能需要更长等待时间；模板默认 `LLM_TIMEOUT_MS=300000`。`thinking` 和 `reasoning_effort` 只影响模型推理过程，不改变本地 token 边界或结果校验。
-长句的结构化解析可能同时包含推理和 JSON 内容，模板将 `LLM_MAX_TOKENS` 设为 `32000`；如果供应商或账户限制更低，请按实际限制调小。
+推理型模型可能需要等待时间；模板默认 `LLM_REASONING_EFFORT=medium`、`LLM_MAX_TOKENS=12000` 和
+`LLM_TIMEOUT_MS=300000`。多个短句会按 `LLM_BATCH_SIZE` 合并到同一请求，并使用流式响应逐步接收结果。
+`thinking`、`reasoning_effort` 和 batch 只影响请求编排与教学表达，不改变本地 token 边界或结果校验。
 
 开发者排查请求时，可以在本机 `.env` 临时启用：
 

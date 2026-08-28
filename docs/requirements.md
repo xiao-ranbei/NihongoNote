@@ -157,10 +157,11 @@ DeepSeek 官方入口：
 | LLM-005 | 空结果和截断处理 | 空内容、非法 JSON 或长度截断必须标记为失败并可重试，不得显示为完成 |
 | LLM-006 | 协议可替换 | 增加 Anthropic-compatible adapter 时，不修改前端阅读器和持久化分析 schema |
 | LLM-007 | 调用元数据 | 保存 provider、model、protocol、promptVersion、输入/输出用量、缓存命中和错误分类 |
+| LLM-008 | 批量和流式请求 | 多个短句在受控 batch 中合并请求；OpenAI SDK 使用流式响应并支持取消，batch 完成后仍逐句校验和保存 |
 
 DeepSeek JSON Output 需要在 prompt 中明确要求 JSON，并设置合理的 `max_tokens`；即使返回合法 JSON，也必须继续校验业务字段和原文 ID。
 
-当前实现已覆盖 LLM-001、LLM-003、LLM-004、LLM-005 的基础链路，以及使用官方 OpenAI SDK 的 DeepSeek OpenAI-compatible adapter；`deepseek-v4-flash`、`thinking`、`reasoning_effort`、JSONL 调试日志和请求取消均由服务端配置。已用真实 key 完成一段商务发言（3 个 segment）的连通性和 schema 验证，但 LLM-002 仍需使用完整固定评估样本完成质量/费用验收。LLM-006（Anthropic-compatible adapter）属于后续阶段。API 重启恢复逻辑会将中断的 `processing` 句段重新置为可重试状态。
+当前实现已覆盖 LLM-001、LLM-003、LLM-004、LLM-005 和 LLM-008 的基础链路，以及使用官方 OpenAI SDK 的 DeepSeek OpenAI-compatible adapter；默认 `deepseek-v4-flash` 使用 `thinking=enabled`、`reasoning_effort=medium`、`max_tokens=12000`、受控 batch 和流式响应，JSONL 调试日志和请求取消均由服务端配置。已用真实 key 完成一段商务发言（3 个 segment）的连通性和 schema 验证，但 LLM-002 仍需使用完整固定评估样本完成质量/费用验收。LLM-006（Anthropic-compatible adapter）属于后续阶段。API 重启恢复逻辑会将中断的 `processing` 句段重新置为可重试状态。
 
 ## 三、产品目标
 
