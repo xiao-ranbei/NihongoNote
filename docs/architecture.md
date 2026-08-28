@@ -1,6 +1,6 @@
 # 技术架构方案
 
-**状态**：第一版推荐方案（已确定首个 LLM 接入路径）
+**状态**：第一版推荐方案（已确定首个 LLM 接入路径和 P1 MVP 边界）
 **适用范围**：单用户、本机 Web 应用、允许使用云端 LLM；TTS provider 仅预留接口
 
 ## 一、总体架构
@@ -34,7 +34,7 @@ flowchart LR
 
 这套栈适合本地部署的原因是组件少、运行成本低、API 密钥不经过浏览器，也保留将来拆分或公网部署的空间。当前选择 `sql.js` 是为了让 Windows 开发环境不依赖 `better-sqlite3` 的原生模块编译；数据库在内存中运行，在写入后导出回本地 SQLite 文件。
 
-当前代码已经提供文章保存、SQLite 初始化、健康检查、基础分句、确定性 token 边界、前端阅读预览、DeepSeek OpenAI-compatible adapter 和句段分析任务；TTS provider 当前保持 disabled，更细的日语形态素字段及 Anthropic-compatible adapter 仍保持为后续适配器边界。
+当前代码已经提供文章保存、SQLite 初始化、健康检查、基础分句、确定性 token 边界、前端阅读预览、DeepSeek OpenAI-compatible adapter 和句段分析任务；TTS provider 当前保持 disabled，更细的日语形态素字段及 Anthropic-compatible adapter 仍保持为后续适配器边界。P1 先以 token + 句子两层形成可验证闭环，完整范围标注和等级解释分层在不破坏稳定 ID 的前提下逐步加入。
 
 ## 三、模块边界
 
@@ -43,15 +43,18 @@ flowchart LR
 职责：
 
 - 文本输入和标题；
-- 文章类型、混合区块和“是否参与解析”的预览与修正；
+- 用户手动选择为主、自动识别只提供建议的文章类型和混合区块预览；
+- “是否参与解析”的区块开关；
 - 在一个连续阅读框中渲染文章、段落和句子；
 - 将 token 偏移映射到原文；
-- 背景范围、词语线型和重叠标注的分层渲染；
-- 词语/助词/功能词/副词悬浮高亮、解析卡片和逐层点击状态；
-- “编辑解析”模式下的区块、分句、标注范围和字段修正；
+- P1 MVP 的句子层和 token 层渲染与解析卡片；
+- 后续的背景范围、词语线型和重叠标注分层渲染；
+- 后续的词语/助词/功能词/副词悬浮高亮和逐层点击状态；
+- 首版“编辑解析”模式下的标题、角色和解析字段修正；
+- 后续的区块、分句和标注范围修正；
 - 分析进度、失败重试和错误提示；
-- 分析取消、剩余句段续跑；
-- 可折叠学习库、历史列表、搜索和筛选。
+- 分析取消：中止当前云端请求并停止后续请求，保留已完成结果；
+- 可折叠学习库、历史列表、搜索和分析状态筛选；内容类型筛选后续加入。
 
 前端不得：
 
@@ -67,9 +70,9 @@ flowchart LR
 - 内容区块、句子切分和分词；
 - 长文本切块和上下文窗口；
 - 调用 LLM、校验结果、保存状态；
-- 取消分析并将未完成句段恢复为可续跑状态；
+- 取消分析并中止正在进行的云端请求，将未完成句段恢复为可续跑状态；
 - 保存 AI 原始结果和用户修正版本；
-- 删除、搜索和内容类型/分析状态筛选；
+- 删除、搜索和分析状态筛选；内容类型筛选作为后续扩展；
 - 统一错误、重试和取消。
 
 建议的接口（名称可在实现时微调）：
@@ -88,7 +91,7 @@ POST   /api/segments/:segmentId/retry
 PATCH  /api/documents/:documentId/blocks/:blockId
 PATCH  /api/segments/:segmentId/annotations
 
-GET    /api/search?q=...&contentType=...&status=...
+GET    /api/search?q=...&status=...
 ```
 
 以下接口仅作为后续 TTS 播放预留，不属于当前版本：
@@ -106,28 +109,31 @@ GET    /api/audio/:audioId
 2. **区块和句子切分**：空行划分独立段落/区块；再按标题/注释候选、日语标点和对话标记生成稳定的 block/segment ID，句末标点属于句子范围。普通单换行只作为保留的排版空白，不自动创建新的段落或句子；说话人标签保留在原文中但单独存储，不进入日语 token 或 AI 分析；保留用户对区块类型和分析开关的覆盖。
 3. **本地 token 边界**：保存后自动使用确定性日语分词取得 surface 和字符偏移，不产生云端调用；用户启动深度分析后，模型只补充原形、读音、词性、词义和语法字段。
 4. **分块**：按段落和 token/字符上限组合请求；每块携带有限的前后文。
-5. **结构化生成**：用户启动深度分析后，一次生成已启用区块的词语、助词、功能词、副词、语法、句子、语气和对话关系解析；要求模型只返回版本化 JSON，不让前端依赖 Markdown。
-6. **schema 校验**：校验 block/segment ID、token 范围、跨 token 标注范围和必填字段；失败则标记为失败并显示原因。
-7. **落盘**：每个 segment 独立保存，范围标注和原始响应分别保存，支持增量展示、取消后续跑和断点续跑。
-8. **人工修正入口**：允许修正区块、角色、分句、标注范围和字段；修正不应覆盖原始模型响应。
+5. **结构化生成**：用户启动深度分析后，先生成与目标等级无关的 `CanonicalAnalysis`；P1 MVP 先使用其中的句子和 token 事实，等级化教学表达由独立的 `LevelExplanation` 生成。要求模型只返回版本化 JSON，不让前端依赖 Markdown。
+6. **schema 校验**：校验 block/segment ID、token 范围、跨 token 标注范围和必填字段；基础事实和等级表达都必须通过对应 schema，失败则标记为失败并显示原因。
+7. **落盘**：每个 segment 独立保存 canonical 结果；等级表达按 `canonicalAnalysisId + targetLevel + explanationVersion` 保存或缓存。支持增量展示、取消当前云端请求和断点续跑。
+8. **人工修正入口**：首版允许修正标题、角色和解析字段；后续再开放区块、分句和标注范围修正。修正不应覆盖原始模型响应，并区分事实修正与表达修正。
 
 ### 结构化输出要求
 
 模型响应必须至少包含：
 
 - 文档版本和分析协议版本；
+- 独立于目标等级的 canonical 分析版本；
 - segment ID；
 - 每个 token 的偏移或 token ID；
 - 词汇/助词/语法解释；
-- 句意、会话功能标签、情绪/态度标签、语气强度（`weak`/`medium`/`strong`）、总体礼貌等级（随意/普通/礼貌/尊敬/自谦）、具体语体/敬语形式标签（普通体、敬体、尊敬语、自谦语、丁寧语/礼貌表达、郑重语、商务正式表达）、潜台词及其原文依据；
+- 句意、基础语气/态度、总体礼貌等级（随意/普通/礼貌/尊敬/自谦）、具体语体/敬语形式标签（普通体、敬体、尊敬语、自谦语、丁寧语/礼貌表达、郑重语、商务正式表达）、潜台词及其原文依据；
 - `translation` 默认是自然中文译文；直译字段按用户主动请求按需生成，不作为首次深度分析的必填输出；
-- 对话中的上下文和回复理由；
+- 对话中的上下文和回复理由；首版以自然语言为主；
 - `confidence` 或 `uncertaintyNote`；
 - 模型无法判断时的明确标记。
 - 内容类型/区块类型建议和识别依据；用户手动指定的类型优先于模型建议。
-- 多词语法、语气/态度/隐含意义的范围标识，以及它们关联的 token ID。
-- 会话功能和情绪/态度应分别返回可多选的稳定标签；同时返回 `weak`/`medium`/`strong` 强度等级和 evidence token/range ID，不能只有无法校验的自由文本。
+- 后续版本的多词语法、语气/态度/隐含意义范围及其 token ID。
+- 后续版本的稳定会话标签、强度等级和 evidence token/range ID；首版不要求用它们替代自然语言说明。
 - 对话关系引用的相邻 segment ID；非对话材料没有依据时返回空关系。
+
+目标等级只允许影响 `LevelExplanation` 中的说明深度、术语复杂度和教学例子，不得改变 `CanonicalAnalysis` 的 token、范围、语法事实或原文证据。
 
 推荐把“原始响应”和“规范化结果”分开保存，方便排查模型质量问题。
 
@@ -138,19 +144,29 @@ GET    /api/audio/:audioId
 - 每块带上前后若干句，而只保存当前块负责的 segment；
 - 为每块生成幂等 key，避免重复扣费；
 - 失败段落可单独重试；
+- 取消时中止当前云端请求，并阻止队列继续发出新的请求；
 - 在 UI 中显示当前块和预计剩余段数；
 - 跨块引用保持文档内 segment ID，不复制大量原文。
 
 ### 连续文章和分层标注实现方案
 
-#### 原文和范围模型
+#### P1 MVP 边界
+
+P1 MVP 只实现两个可交互层次：
+
+1. **句子层**：使用稳定的 segment ID 显示句子范围、句意、语气和上下文说明。
+2. **token 层**：使用本机生成的 token ID 和 UTF-16 偏移显示词语事实和词语解析。
+
+语法范围、语气/态度范围、重叠色块、线型和四层循环点击先作为 `AnnotationRange`、evidence ID 和交互状态的扩展边界，不因 MVP 而使用字符串搜索或嵌套可点击元素替代稳定定位。
+
+#### 原文和范围模型（完整版本）
 
 1. 保存前输入仍可编辑；保存后服务端保留不可变的 `sourceText`，所有 block、segment、token 和 annotation range 都使用相对于原文/句段的 UTF-16 偏移与稳定 ID。
 2. `ContentBlock` 表示标题、正文、对话、例句或注释等区块，带有检测类型、用户选择类型和 `analysisEnabled`。标题、编号和中文注释默认关闭解析，正文和日语例句默认开启。
 3. `TokenAnalysis` 只表示确定性的词语边界；跨多个 token 的分句、语法、语气和态度使用 `AnnotationRange` 表示，并通过 token ID 关联。
 4. AI 返回的范围必须通过原文切片、ID 归属和边界检查。无法验证的范围不能进入完成状态，只能进入失败或待人工修正状态。
 
-#### 前端分层渲染
+#### 前端分层渲染（完整版本）
 
 前端不为每个句子创建独立卡片，而是把完整文章切成最小连续文本片段，再为每个片段计算两套互相独立的视觉属性：
 
@@ -162,7 +178,7 @@ GET    /api/audio/:audioId
 
 实现上建议使用区间扫描（interval sweep）或等价的范围切分算法，先生成不重叠的原文片段，再合并背景层和线型层属性。不要通过嵌套多个可点击 `<button>` 表达重叠范围，否则会产生非法交互嵌套、焦点顺序和点击冒泡问题。
 
-#### 点击、悬浮和锚点卡片
+#### 点击、悬浮和锚点卡片（完整版本）
 
 - 维护 `selectedSourceRange`、`interactionStage` 和当前卡片状态；同一原文位置重复点击时按“句子结构 → 词语/助词/功能词/副词 → 多词语法 → 语气/态度”循环，缺少对应标注时跳过该层，点击其他位置将阶段重置为第一层，点击文章外关闭卡片。
 - 悬浮只强化当前范围，不显示弹窗；句子、词语、助词、功能词、副词、语法和语气的完整解释统一在点击后打开。
@@ -171,27 +187,30 @@ GET    /api/audio/:audioId
 
 #### 内容类型、对话关系和编辑版本
 
-- 文章级类型作为默认值，区块级自动识别可以覆盖它；用户手动选择的区块类型和解析开关优先于 AI 建议。
-- 句意、语法、语气和不确定性是通用字段；对话关系只在有角色/上下文依据的区块中生成，分析时一次生成关系标签和自然语言原因，默认在当前句旁显示上一句/下一句的关系，用户展开后再显示句子之间的箭头和更多已生成关系。
-- “编辑解析”采用版本化或快照方式保存。用户修正与 AI 原始结果分开，重新分析时不得静默覆盖用户版本；若范围被重新分词，必须显示冲突并要求用户选择。
+- 文章级类型以用户手动选择为主，区块级自动识别只提供建议；用户手动选择的区块类型和解析开关优先于 AI 建议。
+- 句意、语法、语气和不确定性是通用字段；首版对话关系只在有角色/上下文依据时生成自然语言原因，稳定标签、强度和 evidence range 后续加入。
+- “编辑解析”采用版本化或快照方式保存。首版先支持标题、角色和解析字段修正；用户修正与 AI 原始结果分开，重新分析时不得静默覆盖用户版本；若范围被重新分词，必须显示冲突并要求用户选择。
 
 #### 学习库布局
 
 - 桌面端使用可收缩的窄侧栏/图标轨道，折叠后主阅读区扩展；手机端使用覆盖主内容的抽屉。
 - 展开状态、搜索词和筛选条件属于前端界面状态；折叠偏好保存到本机浏览器。
-- 列表 API 支持最近更新时间、内容类型和分析状态筛选；第一版不引入文件夹和标签层级。`targetLevel` 字段保留在后台数据结构中，但当前界面和解析不使用它。
+- 列表 API 首版支持最近更新时间、搜索和分析状态筛选；内容类型筛选后续加入，第一版不引入文件夹和标签层级。`targetLevel` 作为教学表达偏好保留，不作为学习库筛选条件。
 
 ## 五、Provider Adapter
 
 ### LLM adapter
 
-统一接口应包含：
+统一接口的长期目标应拆成两个阶段：
 
 ```text
-analyze(segments, context, targetLevel, promptVersion) -> ValidatedAnalysis
+analyzeCanonical(segments, context, promptVersion) -> CanonicalAnalysis
+generateLevelExplanation(canonicalAnalysis, targetLevel, promptVersion) -> LevelExplanation
 ```
 
-当前产品不提供难度设置，`targetLevel` 仅作为兼容未来扩展的保留参数，统一使用固定值且不得改变当前解释方式。
+`CanonicalAnalysis` 是事实和结构的唯一来源；`LevelExplanation` 只负责面向目标等级的教学表达。用户切换等级时只重新生成或读取 `LevelExplanation`，不重新分词、不重新请求基础事实，也不改变前端定位。
+
+当前 `LlmProvider.analyze()` 仍可作为过渡接口，但其实现必须把 `targetLevel` 限制在解释语义中，不能让不同等级产生不同 token、范围或语法事实。后续拆分接口时，前端和稳定 ID 不应改变。
 
 第一阶段实现两个层次：
 
@@ -260,7 +279,7 @@ DeepSeek 官方 JSON Output 说明还提示可能出现空内容或截断，因�
 
 #### Anthropic-compatible 适配器（后续实现）
 
-后续使用 `/messages`，将 system、messages、max tokens 和文本 content 转换为内部请求。只依赖协议兼容层公开支持的基础字段，不依赖某家服务的缓存、文档或特殊 thinking 字段。解析后统一转为内部 `SegmentAnalysis[]`，前端和数据库不感知协议差异。
+后续使用 `/messages`，将 system、messages、max tokens 和文本 content 转换为内部请求。只依赖协议兼容层公开支持的基础字段，不依赖某家服务的缓存、文档或特殊 thinking 字段。解析后统一转为内部 `CanonicalAnalysis` 或 `LevelExplanation`，前端和数据库不感知协议差异。
 
 前端只知道“分析成功/进行中/失败”，不应依赖某个供应商的响应格式。
 
@@ -298,10 +317,16 @@ provider, model, promptVersion, inputUnits, outputUnits,
 segmentCount, cacheHit, startedAt, completedAt, errorCode
 ```
 
-不要在普通日志中写入完整文章。缓存 key 至少包含：
+不要在普通日志中写入完整文章。canonical 缓存 key 至少包含：
 
 ```text
-hash(sourceText, tokenizerVersion, promptVersion, model, targetLevel)
+hash(sourceText, tokenizerVersion, promptVersion, model, canonicalSchemaVersion)
+```
+
+等级解释缓存 key 在 canonical key 基础上增加：
+
+```text
+targetLevel, explanationVersion
 ```
 
 ## 八、隐私和错误处理
@@ -332,8 +357,8 @@ hash(sourceText, tokenizerVersion, promptVersion, model, targetLevel)
 
 等 Web 应用稳定后，可增加一个可复用的分析 skill：
 
-- 输入：一个或多个 segment、上下文、目标难度；
-- 输出：与 Web API 相同版本的结构化 JSON；
+- 输入：一个或多个 segment、上下文，以及可选的目标难度；
+- 输出：与 Web API 相同版本的 `CanonicalAnalysis` 和/或 `LevelExplanation` 结构化 JSON；
 - Web 后端和 Agent 共用同一份 schema 和提示词版本；
 - Agent 可用于“深入解释当前句子”或批量导入；
 - skill 不直接持有数据库和 API 密钥，调用权限由宿主或本机服务负责。
