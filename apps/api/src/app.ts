@@ -17,14 +17,20 @@ export async function createApp(config: AppConfig): Promise<FastifyInstance> {
   const database = await createDatabase(config.databaseFile);
   const repository = new DocumentRepository(database);
   repository.recoverInterruptedAnalyses();
-  const analysisService = new AnalysisService(repository, providers.llm, config.llmPromptVersion);
+  const analysisService = new AnalysisService(
+    repository,
+    providers.llm,
+    config.llmPromptVersion,
+    config.llmBatchSize,
+    config.llmBatchConcurrency
+  );
 
   registerHealthRoutes(app, database);
   registerDocumentRoutes(app, repository, analysisService);
   registerAnalysisRoutes(app, repository, analysisService, providers.llm);
 
   app.addHook("onClose", async () => {
-    analysisService.cancelAll();
+    await analysisService.close();
     database.close();
   });
 

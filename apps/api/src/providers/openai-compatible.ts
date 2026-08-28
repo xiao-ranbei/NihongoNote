@@ -35,15 +35,18 @@ interface OpenAiCompatibleProviderConfig {
 }
 
 type DeepSeekChatCompletionParams =
-  OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming & {
+  OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming & {
     thinking?: {
       type: "enabled" | "disabled";
     };
   };
 
 const analysisEnvelopeSchema = z.object({
-  analyses: z.array(segmentAnalysisSchema)
-});
+  analyses: z.array(z.unknown())
+}).strict();
+const segmentIdSchema = z.object({
+  segmentId: z.string().min(1)
+}).passthrough();
 
 const systemPrompt = `You are NihongoNote, a careful Japanese language tutor.
 Analyze the supplied Japanese sentence or dialogue segment for a Chinese-speaking learner.
@@ -112,6 +115,70 @@ function parseJsonResponse(responseBody: string): unknown {
   }
 }
 
+function validateRequest(request: AnalysisRequest): void {
+  if (request.segments.length === 0) {
+    throw new ProviderRequestError("Analysis request must contain at least one segment");
+  }
+  const segmentIds = new Set(request.segments.map((segment) => segment.id));
+  if (segmentIds.size !== request.segments.length) {
+    throw new ProviderRequestError("Analysis request contains duplicate segment IDs");
+  }
+  const boundaryIds = request.tokenBoundaries.map((group) => group.segmentId);
+  const contextIds = request.surroundingContext.map((group) => group.segmentId);
+  if (
+    boundaryIds.length !== segmentIds.size
+    || new Set(boundaryIds).size !== segmentIds.size
+    || boundaryIds.some((id) => !segmentIds.has(id))
+  ) {
+    throw new ProviderRequestError("Token boundary groups must match the requested segment IDs exactly");
+  }
+  if (
+    contextIds.length !== segmentIds.size
+    || new Set(contextIds).size !== segmentIds.size
+    || contextIds.some((id) => !segmentIds.has(id))
+  ) {
+    throw new ProviderRequestError("Context groups must match the requested segment IDs exactly");
+  }
+
+  const allTokenIds = new Set<string>();
+  for (const group of request.tokenBoundaries) {
+    const segment = request.segments.find((candidate) => candidate.id === group.segmentId);
+    if (!segment) {
+      throw new ProviderRequestError(`Unexpected token boundary segment ID: ${group.segmentId}`);
+    }
+    for (const token of group.tokens) {
+      if (allTokenIds.has(token.tokenId)) {
+        throw new ProviderRequestError(`Duplicate token ID in analysis request: ${token.tokenId}`);
+      }
+      allTokenIds.add(token.tokenId);
+      if (
+        token.startOffset < 0
+        || token.endOffset <= token.startOffset
+        || segment.text.slice(token.startOffset, token.endOffset) !== token.surface
+      ) {
+        throw new ProviderRequestError(
+          `Token ${token.tokenId} does not match segment ${group.segmentId}`
+        );
+      }
+    }
+  }
+}
+
+function schemaIssueMessage(error: z.ZodError): string {
+  const issue = error.issues[0];
+  return issue
+    ? `LLM analysis did not match the schema (${issue.path.join(".")}: ${issue.message})`
+    : "LLM analysis did not match the schema";
+}
+
+function sanitizedErrorMessage(error: unknown, apiKey: string): string {
+  const message = error instanceof Error ? error.message : "unknown request error";
+  return message
+    .replaceAll(apiKey, "[REDACTED]")
+    .replace(/Authorization:\s*\S+/giu, "Authorization: [REDACTED]")
+    .replace(/Bearer\s+\S+/giu, "Bearer [REDACTED]");
+}
+
 function requestPayload(
   request: AnalysisRequest,
   model: string,
@@ -148,9 +215,14 @@ function requestPayload(
       type: "json_object"
     },
     ...(thinkingType ? { thinking: { type: thinkingType } } : {}),
-    ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
+    ...(thinkingType !== "disabled" && reasoningEffort
+      ? { reasoning_effort: reasoningEffort }
+      : {}),
     ...(thinkingType === "enabled" ? {} : { temperature }),
-    stream: false
+    stream: true,
+    stream_options: {
+      include_usage: true
+    }
   };
 }
 
@@ -202,6 +274,7 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
     }
 
     request.signal.throwIfAborted();
+    validateRequest(request);
     const timeoutSignal = AbortSignal.timeout(this.timeoutMs);
     const signal = AbortSignal.any([request.signal, timeoutSignal]);
     const requestId = randomUUID();
@@ -225,17 +298,37 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
         baseUrl: this.config.baseUrl,
         endpoint: endpointFor(this.config.baseUrl),
         model: this.model,
+        stream: true,
+        segmentIds: request.segments.map((segment) => segment.id),
         timeoutMs: this.timeoutMs,
         body: requestBody,
         note: "Authorization header is intentionally omitted; request body contains source text."
       }
     );
-    let completion: OpenAI.Chat.Completions.ChatCompletion;
+    let content = "";
+    let finishReason: string | null = null;
+    let usage: OpenAI.Completions.CompletionUsage | null = null;
+    let responseId: string | null = null;
+    let chunkCount = 0;
     try {
-      completion = await this.client.chat.completions.create(
+      const stream = await this.client.chat.completions.create(
         requestBody,
         { signal }
       );
+      for await (const chunk of stream) {
+        chunkCount += 1;
+        signal.throwIfAborted();
+        responseId ??= chunk.id;
+        usage = chunk.usage ?? usage;
+        const choice = chunk.choices.find((candidate) => candidate.index === 0)
+          ?? chunk.choices[0];
+        if (choice?.delta.content) {
+          content += choice.delta.content;
+        }
+        if (choice?.finish_reason) {
+          finishReason = choice.finish_reason;
+        }
+      }
     } catch (error) {
       writeDebugLog(
         this.debugLogging,
@@ -245,7 +338,7 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
         {
           durationMs: Date.now() - startedAt,
           errorName: error instanceof Error ? error.name : "UnknownError",
-          errorMessage: error instanceof Error ? error.message : "unknown request error",
+          errorMessage: sanitizedErrorMessage(error, this.apiKey),
           statusCode: error instanceof APIError ? error.status ?? null : null
         }
       );
@@ -261,13 +354,15 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
         throw new ProviderRequestError("LLM request was aborted");
       }
       if (error instanceof APIError) {
-        throw new ProviderRequestError(error.message, error.status ?? null);
+        throw new ProviderRequestError(
+          sanitizedErrorMessage(error, this.apiKey),
+          error.status ?? null
+        );
       }
-      const detail = error instanceof Error ? error.message : "unknown network error";
+      const detail = sanitizedErrorMessage(error, this.apiKey);
       throw new ProviderRequestError(`LLM request failed: ${detail}`);
     }
 
-    const choice = completion.choices[0];
     writeDebugLog(
       this.debugLogging,
       this.debugLogFile,
@@ -275,26 +370,26 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
       requestId,
       {
         durationMs: Date.now() - startedAt,
-        responseId: completion.id,
-        finishReason: choice?.finish_reason ?? null,
-        contentLength: choice?.message.content?.length ?? 0,
-        content: choice?.message.content ?? null,
-        usage: completion.usage ?? null
+        responseId,
+        finishReason,
+        chunkCount,
+        contentLength: content.length,
+        usage
       }
     );
-    if (!choice) {
+    if (responseId === null) {
       throw new ProviderRequestError("LLM response did not contain a completion choice");
     }
-    if (choice.finish_reason === "length") {
+    if (finishReason === "length") {
       throw new ProviderRequestError(
         "LLM response was truncated at the token limit; increase LLM_MAX_TOKENS and retry"
       );
     }
-    if (!choice.message.content || choice.message.content.trim().length === 0) {
+    if (content.trim().length === 0) {
       throw new ProviderRequestError("LLM returned empty analysis content");
     }
 
-    const analysisPayload = parseJsonResponse(choice.message.content);
+    const analysisPayload = parseJsonResponse(content);
     const analysisEnvelope = analysisEnvelopeSchema.safeParse(analysisPayload);
     if (!analysisEnvelope.success) {
       const issue = analysisEnvelope.error.issues[0];
@@ -304,13 +399,38 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
       );
     }
 
+    const expectedSegmentIds = new Set(request.segments.map((segment) => segment.id));
+    const analyses = [];
+    const failures: LlmAnalysisResult["failures"] = [];
+    for (const item of analysisEnvelope.data.analyses) {
+      const idResult = segmentIdSchema.safeParse(item);
+      const segmentId = idResult.success ? idResult.data.segmentId : null;
+      if (segmentId !== null && !expectedSegmentIds.has(segmentId)) {
+        failures.push({
+          segmentId: null,
+          message: `LLM returned an unexpected segment ID: ${segmentId}`
+        });
+        continue;
+      }
+      const parsed = segmentAnalysisSchema.safeParse(item);
+      if (!parsed.success) {
+        failures.push({
+          segmentId,
+          message: schemaIssueMessage(parsed.error)
+        });
+        continue;
+      }
+      analyses.push(parsed.data);
+    }
+
     return {
-      analyses: analysisEnvelope.data.analyses,
-      usage: completion.usage
+      analyses,
+      failures,
+      usage: usage
         ? {
-            inputTokens: completion.usage.prompt_tokens ?? null,
-            outputTokens: completion.usage.completion_tokens ?? null,
-            totalTokens: completion.usage.total_tokens ?? null
+            inputTokens: usage.prompt_tokens ?? null,
+            outputTokens: usage.completion_tokens ?? null,
+            totalTokens: usage.total_tokens ?? null
           }
         : null
     };

@@ -6,8 +6,18 @@ import {
 } from "@nihongonote/core";
 
 import { DocumentRepository } from "../repositories/document-repository.js";
-import type { LlmProvider } from "../providers/types.js";
+import type {
+  LlmAnalysisResult,
+  LlmProvider,
+  SegmentTokenBoundaries
+} from "../providers/types.js";
 import { tokenizeJapanese, type TokenBoundary } from "../tokenization.js";
+
+interface ActiveRun {
+  id: symbol;
+  controller: AbortController;
+  completion: Promise<void>;
+}
 
 function errorMessage(reason: unknown): string {
   return reason instanceof Error ? reason.message : "分析失败，原因未知";
@@ -69,15 +79,14 @@ function contextFor(segment: Segment, allSegments: Segment[]): string[] {
 }
 
 export class AnalysisService {
-  private readonly activeRuns = new Map<string, {
-    id: symbol;
-    controller: AbortController;
-  }>();
+  private readonly activeRuns = new Map<string, ActiveRun>();
 
   public constructor(
     private readonly repository: DocumentRepository,
     private readonly provider: LlmProvider,
-    private readonly promptVersion: string
+    private readonly promptVersion: string,
+    private readonly batchSize = 3,
+    private readonly batchConcurrency = 2
   ) {}
 
   public start(documentId: string): AnalysisProgress | undefined {
@@ -88,12 +97,13 @@ export class AnalysisService {
 
     this.repository.markDocumentAnalyzing(documentId);
     if (!this.activeRuns.has(documentId)) {
-      const run = {
+      const run: ActiveRun = {
         id: Symbol(documentId),
-        controller: new AbortController()
+        controller: new AbortController(),
+        completion: Promise.resolve()
       };
       this.activeRuns.set(documentId, run);
-      void this.process(documentId, run);
+      run.completion = this.process(documentId, run);
     }
 
     return this.repository.getAnalysisProgress(documentId);
@@ -108,10 +118,7 @@ export class AnalysisService {
       this.cancel(segment.documentId);
     }
     const documentId = this.repository.queueSegmentRetry(segmentId);
-    if (!documentId) {
-      return undefined;
-    }
-    return this.start(documentId);
+    return documentId ? this.start(documentId) : undefined;
   }
 
   public cancel(documentId: string): AnalysisProgress | undefined {
@@ -134,17 +141,111 @@ export class AnalysisService {
     }
   }
 
-  private isCurrent(
-    documentId: string,
-    run: { id: symbol; controller: AbortController }
-  ): boolean {
+  public async close(): Promise<void> {
+    const completions = [...this.activeRuns.values()].map((run) => run.completion);
+    this.cancelAll();
+    await Promise.allSettled(completions);
+  }
+
+  private isCurrent(documentId: string, run: ActiveRun): boolean {
     return this.activeRuns.get(documentId)?.id === run.id && !run.controller.signal.aborted;
   }
 
-  private async process(
+  private async processBatch(
     documentId: string,
-    run: { id: symbol; controller: AbortController }
+    run: ActiveRun,
+    document: NonNullable<ReturnType<DocumentRepository["getById"]>>,
+    allSegments: Segment[],
+    batch: Segment[]
   ): Promise<void> {
+    const tokenBoundaries: SegmentTokenBoundaries[] = batch.map((segment) => ({
+      segmentId: segment.id,
+      tokens: tokenizeJapanese(segment.text, segment.id)
+    }));
+
+    let result: LlmAnalysisResult;
+    try {
+      result = await this.provider.analyze({
+        segments: batch,
+        tokenBoundaries,
+        surroundingContext: batch.map((segment) => ({
+          segmentId: segment.id,
+          context: contextFor(segment, allSegments)
+        })),
+        contentType: document.contentType,
+        targetLevel: document.targetLevel,
+        promptVersion: this.promptVersion,
+        signal: run.controller.signal
+      });
+    } catch (reason: unknown) {
+      if (!this.isCurrent(documentId, run)) {
+        return;
+      }
+      const message = errorMessage(reason);
+      for (const segment of batch) {
+        this.repository.markSegmentFailed(segment.id, message);
+      }
+      return;
+    }
+
+    if (!this.isCurrent(documentId, run)) {
+      return;
+    }
+
+    const analysesBySegment = new Map<string, SegmentAnalysis[]>();
+    for (const analysis of result.analyses) {
+      const analyses = analysesBySegment.get(analysis.segmentId) ?? [];
+      analyses.push(analysis);
+      analysesBySegment.set(analysis.segmentId, analyses);
+    }
+    const failuresBySegment = new Map<string, string[]>();
+    const unassignedFailures: string[] = [];
+    for (const failure of result.failures) {
+      if (failure.segmentId === null) {
+        unassignedFailures.push(failure.message);
+      } else {
+        const failures = failuresBySegment.get(failure.segmentId) ?? [];
+        failures.push(failure.message);
+        failuresBySegment.set(failure.segmentId, failures);
+      }
+    }
+
+    for (const [index, segment] of batch.entries()) {
+      if (!this.isCurrent(documentId, run)) {
+        return;
+      }
+      const analyses = analysesBySegment.get(segment.id) ?? [];
+      const failures = failuresBySegment.get(segment.id) ?? [];
+      try {
+        if (failures.length > 0) {
+          throw new Error(failures.join("; "));
+        }
+        if (analyses.length !== 1) {
+          const detail = analyses.length === 0
+            ? (unassignedFailures[0] ?? "LLM omitted this segment from the batch response")
+            : `LLM returned duplicate analyses for segment ${segment.id}`;
+          throw new Error(detail);
+        }
+        const boundaryGroup = tokenBoundaries[index];
+        if (!boundaryGroup || boundaryGroup.segmentId !== segment.id) {
+          throw new Error(`Internal token boundary mismatch for segment ${segment.id}`);
+        }
+        const analysis = validateAnalysis(segment, analyses[0]!, boundaryGroup.tokens);
+        this.repository.saveSegmentAnalysis(
+          segment.id,
+          analysis,
+          this.provider.name,
+          this.provider.model,
+          this.promptVersion,
+          result.usage
+        );
+      } catch (reason: unknown) {
+        this.repository.markSegmentFailed(segment.id, errorMessage(reason));
+      }
+    }
+  }
+
+  private async process(documentId: string, run: ActiveRun): Promise<void> {
     try {
       while (this.isCurrent(documentId, run)) {
         const document = this.repository.getById(documentId);
@@ -152,50 +253,29 @@ export class AnalysisService {
           return;
         }
         const segments = this.repository.getSegmentsForAnalysis(documentId);
-        const segment = segments.find((candidate) => candidate.status === "queued");
-        if (!segment) {
+        const queued = segments.filter((segment) => segment.status === "queued");
+        if (queued.length === 0) {
           break;
         }
-        if (!this.repository.markSegmentProcessing(segment.id)) {
+
+        const candidateBatches: Segment[][] = [];
+        const waveSize = this.batchSize * this.batchConcurrency;
+        for (let offset = 0; offset < Math.min(queued.length, waveSize); offset += this.batchSize) {
+          candidateBatches.push(queued.slice(offset, offset + this.batchSize));
+        }
+        const batches = candidateBatches
+          .map((batch) => {
+            const claimed = new Set(this.repository.markSegmentsProcessing(batch.map((segment) => segment.id)));
+            return batch.filter((segment) => claimed.has(segment.id));
+          })
+          .filter((batch) => batch.length > 0);
+
+        if (batches.length === 0) {
           continue;
         }
-
-        try {
-          const tokenBoundaries = tokenizeJapanese(segment.text, segment.id);
-          const result = await this.provider.analyze({
-            segments: [segment],
-            tokenBoundaries,
-            surroundingContext: contextFor(segment, segments),
-            contentType: document.contentType,
-            targetLevel: document.targetLevel,
-            promptVersion: this.promptVersion,
-            signal: run.controller.signal
-          });
-
-          if (!this.isCurrent(documentId, run)) {
-            return;
-          }
-          if (result.analyses.length !== 1) {
-            throw new Error(
-              `LLM returned ${result.analyses.length} analyses for segment ${segment.id}; expected exactly one`
-            );
-          }
-
-          const analysis = validateAnalysis(segment, result.analyses[0]!, tokenBoundaries);
-          this.repository.saveSegmentAnalysis(
-            segment.id,
-            analysis,
-            this.provider.name,
-            this.provider.model,
-            this.promptVersion,
-            result.usage
-          );
-        } catch (reason: unknown) {
-          if (!this.isCurrent(documentId, run)) {
-            return;
-          }
-          this.repository.markSegmentFailed(segment.id, errorMessage(reason));
-        }
+        await Promise.all(
+          batches.map((batch) => this.processBatch(documentId, run, document, segments, batch))
+        );
       }
 
       if (this.isCurrent(documentId, run)) {

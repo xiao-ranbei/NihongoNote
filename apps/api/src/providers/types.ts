@@ -4,10 +4,20 @@ import type { TokenBoundary } from "../tokenization.js";
 
 export type LlmProtocol = "openai" | "anthropic";
 
+export interface SegmentTokenBoundaries {
+  segmentId: string;
+  tokens: TokenBoundary[];
+}
+
+export interface SegmentContext {
+  segmentId: string;
+  context: string[];
+}
+
 export interface AnalysisRequest {
   segments: Segment[];
-  tokenBoundaries: TokenBoundary[];
-  surroundingContext: string[];
+  tokenBoundaries: SegmentTokenBoundaries[];
+  surroundingContext: SegmentContext[];
   contentType: ContentType;
   targetLevel: string;
   promptVersion: string;
@@ -22,6 +32,10 @@ export interface LlmUsage {
 
 export interface LlmAnalysisResult {
   analyses: SegmentAnalysis[];
+  failures: Array<{
+    segmentId: string | null;
+    message: string;
+  }>;
   usage: LlmUsage | null;
 }
 

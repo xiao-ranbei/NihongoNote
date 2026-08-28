@@ -20,6 +20,8 @@ try {
     thinkingType: appConfig.llmThinkingType ?? null,
     reasoningEffort: appConfig.llmReasoningEffort ?? null,
     maxTokens: appConfig.llmMaxTokens,
+    batchSize: appConfig.llmBatchSize,
+    batchConcurrency: appConfig.llmBatchConcurrency,
     timeoutMs: appConfig.llmTimeoutMs,
     debugLogging: appConfig.llmDebugLogging,
     debugLogFile: appConfig.llmDebugLogging ? appConfig.llmDebugLogFile : null

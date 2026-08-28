@@ -18,7 +18,7 @@ const optionalThinkingTypeSchema = z.preprocess(
 
 const optionalReasoningEffortSchema = z.preprocess(
   (value) => typeof value === "string" && value.trim().length === 0 ? undefined : value,
-  z.enum(["minimal", "low", "medium", "high", "xhigh"]).optional()
+  z.enum(["minimal", "low", "medium", "high", "xhigh"]).default("medium")
 );
 
 const booleanEnvironmentSchema = z.preprocess((value) => {
@@ -45,7 +45,9 @@ const environmentSchema = z.object({
   LLM_API_KEY: optionalStringSchema,
   LLM_MODEL: z.string().min(1).default("deepseek-v4-flash"),
   LLM_TEMPERATURE: z.coerce.number().min(0).max(2).default(0.2),
-  LLM_MAX_TOKENS: z.coerce.number().int().positive().max(32_000).default(32_000),
+  LLM_MAX_TOKENS: z.coerce.number().int().positive().max(32_000).default(12_000),
+  LLM_BATCH_SIZE: z.coerce.number().int().min(1).max(10).default(3),
+  LLM_BATCH_CONCURRENCY: z.coerce.number().int().min(1).max(4).default(2),
   LLM_TIMEOUT_MS: z.coerce.number().int().positive().max(300_000).default(300_000),
   LLM_PROMPT_VERSION: z.string().min(1).default("analysis-v1"),
   LLM_THINKING_TYPE: optionalThinkingTypeSchema,
@@ -73,12 +75,13 @@ export const appConfig = {
   llmModel: environment.LLM_MODEL,
   llmTemperature: environment.LLM_TEMPERATURE,
   llmMaxTokens: environment.LLM_MAX_TOKENS,
+  llmBatchSize: environment.LLM_BATCH_SIZE,
+  llmBatchConcurrency: environment.LLM_BATCH_CONCURRENCY,
   llmTimeoutMs: environment.LLM_TIMEOUT_MS,
   llmPromptVersion: environment.LLM_PROMPT_VERSION,
   llmThinkingType: environment.LLM_THINKING_TYPE
     ?? (environment.LLM_PROVIDER === "deepseek" ? "enabled" : undefined),
-  llmReasoningEffort: environment.LLM_REASONING_EFFORT
-    ?? (environment.LLM_PROVIDER === "deepseek" ? "high" : undefined),
+  llmReasoningEffort: environment.LLM_REASONING_EFFORT,
   llmDebugLogging: environment.LLM_DEBUG_LOGGING,
   llmDebugLogFile: path.resolve(
     environment.LLM_DEBUG_LOG_FILE

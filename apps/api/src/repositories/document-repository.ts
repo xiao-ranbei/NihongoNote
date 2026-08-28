@@ -630,6 +630,24 @@ export class DocumentRepository {
     `, [new Date().toISOString(), segmentId]) > 0;
   }
 
+  public markSegmentsProcessing(segmentIds: string[]): string[] {
+    const claimed: string[] = [];
+    const now = new Date().toISOString();
+    this.database.transaction(() => {
+      for (const segmentId of segmentIds) {
+        const changed = this.database.run(`
+          UPDATE segments
+          SET status = 'processing', error_message = NULL, updated_at = ?
+          WHERE id = ? AND status = 'queued'
+        `, [now, segmentId]);
+        if (changed > 0) {
+          claimed.push(segmentId);
+        }
+      }
+    });
+    return claimed;
+  }
+
   public markSegmentFailed(segmentId: string, errorMessage: string): boolean {
     const normalizedMessage = errorMessage.trim().slice(0, 2_000) || "分析失败";
     return this.database.run(`
@@ -648,7 +666,16 @@ export class DocumentRepository {
     usage: LlmUsage | null
   ): boolean {
     const now = new Date().toISOString();
+    let saved = false;
     this.database.transaction(() => {
+      const changed = this.database.run(`
+        UPDATE segments
+        SET status = 'completed', error_message = NULL, updated_at = ?
+        WHERE id = ? AND status = 'processing'
+      `, [now, segmentId]);
+      if (changed === 0) {
+        return;
+      }
       this.database.run(`
         INSERT INTO segment_analyses (
           segment_id, provider, model, prompt_version, result_json, usage_json, created_at, updated_at
@@ -671,14 +698,10 @@ export class DocumentRepository {
         now,
         now
       ]);
-      this.database.run(`
-        UPDATE segments
-        SET status = 'completed', error_message = NULL, updated_at = ?
-        WHERE id = ?
-      `, [now, segmentId]);
+      saved = true;
     });
 
-    return true;
+    return saved;
   }
 
   public finalizeDocumentAnalysis(documentId: string): AnalysisProgress | undefined {
