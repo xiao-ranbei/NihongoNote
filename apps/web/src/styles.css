@@ -686,3 +686,361 @@ h2 {
     flex: 1;
   }
 }
+
+.topbar-actions {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+
+.library-toggle,
+.panel-icon-button,
+.icon-button {
+  border: 1px solid #dcd2c4;
+  color: #66594d;
+}
+
+.library-toggle {
+  align-items: center;
+  background: rgba(255, 253, 249, 0.72);
+  border-radius: 999px;
+  display: inline-flex;
+  font-size: 0.74rem;
+  font-weight: 700;
+  gap: 6px;
+  padding: 8px 11px;
+}
+
+.library-toggle:hover,
+.panel-icon-button:hover,
+.icon-button:hover {
+  background: #f4ecdf;
+  border-color: #c9a26f;
+}
+
+.library-toggle-icon {
+  color: #9c7445;
+  font-size: 1rem;
+  line-height: 0.8;
+}
+
+.library-heading-actions {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.panel-icon-button,
+.icon-button {
+  align-items: center;
+  background: transparent;
+  border-radius: 50%;
+  display: inline-flex;
+  height: 27px;
+  justify-content: center;
+  padding: 0;
+  width: 27px;
+}
+
+.workspace.library-collapsed {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.reader-layout {
+  display: grid;
+  gap: 20px;
+  grid-template-columns: minmax(0, 1.45fr) minmax(260px, 0.75fr);
+  margin-top: 24px;
+}
+
+.article-column {
+  min-width: 0;
+}
+
+.article-toolbar {
+  align-items: flex-end;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  margin-bottom: 11px;
+}
+
+.article-toolbar .section-kicker {
+  margin-bottom: 3px;
+}
+
+.article-meta {
+  color: #8b8277;
+  display: block;
+  font-size: 0.74rem;
+}
+
+.annotation-legend {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  justify-content: flex-end;
+}
+
+.annotation-legend-item {
+  align-items: center;
+  color: #756e66;
+  display: inline-flex;
+  font-size: 0.7rem;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.annotation-swatch {
+  border-radius: 3px;
+  display: inline-block;
+  height: 9px;
+  width: 9px;
+}
+
+.article-canvas {
+  background: #fffdf9;
+  border: 1px solid #e3d8c9;
+  border-radius: 16px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75);
+  min-height: 280px;
+  padding: clamp(23px, 4vw, 38px);
+}
+
+.article-content {
+  color: #3e342b;
+  font-family: "Yu Mincho", "Hiragino Mincho ProN", serif;
+  font-size: clamp(1.06rem, 1.4vw, 1.2rem);
+  letter-spacing: 0.015em;
+  line-height: 2.25;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.article-source-gap,
+.article-plain {
+  white-space: pre-wrap;
+}
+
+.article-segment-wrapper {
+  border-radius: 6px;
+  transition: background 150ms ease, box-shadow 150ms ease;
+}
+
+.article-segment-wrapper.is-active {
+  background: rgba(245, 233, 214, 0.72);
+  box-shadow: 0 0 0 3px rgba(245, 233, 214, 0.72);
+}
+
+.article-segment {
+  border-radius: 6px;
+  cursor: text;
+  outline: none;
+  transition: background 150ms ease;
+}
+
+.article-segment.status-failed {
+  text-decoration: underline wavy #c47b6d 1px;
+  text-underline-offset: 4px;
+}
+
+.article-segment.status-processing {
+  background: transparent;
+}
+
+.annotation-token {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 4px;
+  color: inherit;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  margin: 0 1px;
+  padding: 1px 3px;
+  transition: background 150ms ease, border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.annotation-token:hover,
+.annotation-token.is-selected {
+  box-shadow: 0 0 0 2px rgba(111, 89, 61, 0.13);
+}
+
+.annotation-word {
+  background: #f2eadf;
+  border-bottom-color: #c5a579;
+}
+
+.annotation-particle {
+  background: #e4f0ed;
+  border-bottom-color: #70a89b;
+}
+
+.annotation-adverb {
+  background: #ece7f5;
+  border-bottom-color: #9a86bf;
+}
+
+.annotation-grammar {
+  background: #f9e8d6;
+  border-bottom-color: #d49b60;
+}
+
+.annotation-word:hover,
+.annotation-word.is-selected,
+.annotation-swatch.annotation-word {
+  background: #e4d3ba;
+}
+
+.annotation-particle:hover,
+.annotation-particle.is-selected,
+.annotation-swatch.annotation-particle {
+  background: #b9d9d1;
+}
+
+.annotation-adverb:hover,
+.annotation-adverb.is-selected,
+.annotation-swatch.annotation-adverb {
+  background: #d2c5e6;
+}
+
+.annotation-grammar:hover,
+.annotation-grammar.is-selected,
+.annotation-swatch.annotation-grammar {
+  background: #efc594;
+}
+
+.article-hint {
+  border-top: 1px dashed #e3d8c9;
+  color: #8b8277;
+  font-family: "Avenir Next", "Noto Sans SC", "Yu Gothic", sans-serif;
+  font-size: 0.76rem;
+  line-height: 1.6;
+  margin: 24px 0 0;
+  padding-top: 14px;
+}
+
+.analysis-panel {
+  align-self: start;
+  margin-top: 0;
+  position: sticky;
+  top: 20px;
+}
+
+.token-popover {
+  background: #fbf5eb;
+  border: 1px solid #dfc9a9;
+  border-radius: 13px;
+  box-shadow: 0 12px 26px rgba(83, 66, 45, 0.1);
+  font-family: "Avenir Next", "Noto Sans SC", "Yu Gothic", sans-serif;
+  margin: 23px -8px -8px;
+  padding: 16px;
+}
+
+.token-popover-heading {
+  align-items: flex-start;
+  display: flex;
+  justify-content: space-between;
+}
+
+.token-popover-heading .section-kicker {
+  margin-bottom: 5px;
+}
+
+.token-popover-title {
+  align-items: baseline;
+  display: flex;
+  gap: 9px;
+}
+
+.token-popover-title strong {
+  color: #3e342b;
+  font-family: "Yu Mincho", "Hiragino Mincho ProN", serif;
+  font-size: 1.2rem;
+}
+
+.token-popover-title span {
+  color: #9c7445;
+  font-size: 0.76rem;
+}
+
+.annotation-label {
+  border-radius: 999px;
+  display: inline-flex;
+  font-family: "Avenir Next", "Noto Sans SC", "Yu Gothic", sans-serif;
+  font-size: 0.68rem;
+  font-weight: 700;
+  margin-top: 10px;
+  padding: 4px 8px;
+}
+
+.annotation-label.annotation-word {
+  color: #765b37;
+}
+
+.annotation-label.annotation-particle {
+  color: #397367;
+}
+
+.annotation-label.annotation-adverb {
+  color: #69558f;
+}
+
+.annotation-label.annotation-grammar {
+  color: #a15f27;
+}
+
+.token-facts {
+  display: grid;
+  gap: 9px;
+  margin: 14px 0 0;
+}
+
+.token-facts > div {
+  border-top: 1px solid rgba(186, 157, 119, 0.25);
+  display: grid;
+  gap: 3px;
+  padding-top: 8px;
+}
+
+.token-facts dt {
+  color: #8a6b42;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.token-facts dd {
+  color: #51463a;
+  font-size: 0.8rem;
+  line-height: 1.6;
+  margin: 0;
+}
+
+@media (max-width: 1000px) {
+  .reader-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .analysis-panel {
+    position: static;
+  }
+}
+
+@media (max-width: 700px) {
+  .topbar-actions {
+    align-items: flex-end;
+    flex-direction: column-reverse;
+  }
+
+  .article-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .annotation-legend {
+    justify-content: flex-start;
+  }
+}
