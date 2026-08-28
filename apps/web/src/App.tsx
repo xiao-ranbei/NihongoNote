@@ -1334,13 +1334,14 @@ export default function App(): ReactElement {
                 />
               ) : null}
               <p className="reader-note">
-                文章会在一个连续阅读框中保留原文、换行和标点。P1 MVP 先提供句子层和 token 层解析；点击彩色词块查看词语解释，点击句子空白处查看整句分析。
+                文章会在一个连续阅读框中保留原文、换行和标点。P1 MVP 先提供句子层和 token 层解析；点击彩色词块查看词语解释，点击句子空白处查看整句分析。多个短句会合并为批量请求并以流式方式接收。
               </p>
               {analysisProgress ? (
                 <div className="analysis-progress">
                   <div className="progress-copy">
                     <span>
                       解析进度 · {statusLabel(analysisProgress.status)}
+                      {isAnalysisRunning ? " · 流式处理中" : ""}
                     </span>
                     <strong>
                       {analysisProgress.completedSegments} / {analysisProgress.totalSegments}
