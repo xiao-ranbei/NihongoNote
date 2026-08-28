@@ -1,6 +1,6 @@
 # NihongoNote
 
-NihongoNote 是一个面向个人使用的日语文章解析和听读工具。目前仓库处于基础架构阶段，目标是先建立可启动、可验证、可替换供应商的本地 Web 应用。
+NihongoNote 是一个面向个人使用的日语文章解析和听读工具。目前仓库已完成 P1 MVP 的本地交互闭环，后续继续完善完整范围标注、等级解释层和长期使用能力。
 
 ## 当前架构
 
@@ -51,7 +51,7 @@ pnpm dev
 - Web：<http://127.0.0.1:5173>
 - API 健康检查：<http://127.0.0.1:8787/api/health>
 
-当前 provider 默认为 `disabled`。DeepSeek OpenAI-compatible adapter 和分析 API 已经实现，但需要在本机配置 API key 才会发起云端请求；Anthropic-compatible adapter 和 TTS 尚未实现。目标等级选择会保留为教学表达设置：基础事实分析只生成一份，等级只影响后续解释层。
+当前 provider 默认为 `disabled`。DeepSeek OpenAI-compatible adapter、可取消分析 API 和 P1 MVP 阅读器已经实现，但需要在本机配置 API key 才会发起云端请求；Anthropic-compatible adapter 和 TTS 尚未实现。目标等级选择会保留为教学表达设置：基础事实分析只生成一份，等级只影响后续解释层。
 
 启用 DeepSeek 文本分析：
 
