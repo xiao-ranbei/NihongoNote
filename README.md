@@ -51,7 +51,7 @@ pnpm dev
 - Web：<http://127.0.0.1:5173>
 - API 健康检查：<http://127.0.0.1:8787/api/health>
 
-当前 provider 默认为 `disabled`。DeepSeek OpenAI-compatible adapter 和分析 API 已经实现，但需要在本机配置 API key 才会发起云端请求；Anthropic-compatible adapter 和 TTS 尚未实现。
+当前 provider 默认为 `disabled`。DeepSeek OpenAI-compatible adapter 和分析 API 已经实现，但需要在本机配置 API key 才会发起云端请求；Anthropic-compatible adapter 和 TTS 尚未实现。目标等级选择会保留为教学表达设置：基础事实分析只生成一份，等级只影响后续解释层。
 
 启用 DeepSeek 文本分析：
 
@@ -70,7 +70,7 @@ LLM_MODEL=deepseek-v4-pro
 LLM_API_KEY=your-api-key
 ```
 
-保存文章后，点击“开始 AI 分析”。分析任务会按句段执行，结果通过 JSON schema 校验后保存；失败句段可以单独重试。
+保存文章后，点击“开始 AI 分析”。分析任务会按句段执行，结果通过 JSON schema 校验后保存；失败句段可以单独重试，取消时会中止当前云端请求并停止后续句段。
 包含完整 token 解释的长句可能需要较高的 `LLM_MAX_TOKENS`；模板默认使用 `12000`，可根据实际响应长度调整。
 
 ## 常用命令
