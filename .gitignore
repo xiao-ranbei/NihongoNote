@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.vite/
+coverage/
+**/data/
+.env
+.env.*
+!.env.example
+*.db
+*.db-shm
+*.db-wal
+*.webm
+*.wav
+*.mp3
