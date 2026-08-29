@@ -8,6 +8,7 @@ import { AnalysisService } from "./services/analysis-service.js";
 import { registerAnalysisRoutes } from "./routes/analysis.js";
 import { registerDocumentRoutes } from "./routes/documents.js";
 import { registerHealthRoutes } from "./routes/health.js";
+import { registerLlmRoutes } from "./routes/llm.js";
 
 export async function createApp(config: AppConfig): Promise<FastifyInstance> {
   const app = Fastify({
@@ -27,7 +28,8 @@ export async function createApp(config: AppConfig): Promise<FastifyInstance> {
 
   registerHealthRoutes(app, database);
   registerDocumentRoutes(app, repository, analysisService);
-  registerAnalysisRoutes(app, repository, analysisService, providers.llm);
+  registerAnalysisRoutes(app, analysisService, providers.llm);
+  registerLlmRoutes(app, providers.llm);
 
   app.addHook("onClose", async () => {
     await analysisService.close();

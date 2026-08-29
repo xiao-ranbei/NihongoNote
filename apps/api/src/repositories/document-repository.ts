@@ -214,6 +214,7 @@ function toSegment(
 }
 
 function toProgress(row: ProgressRow): AnalysisProgress {
+  // usage/cost 由 AnalysisService.getProgress() 统一附加；这里先置 null 保证 schema 校验通过
   return analysisProgressSchema.parse({
     documentId: row.document_id,
     status: documentStatusSchema.parse(row.status),
@@ -221,7 +222,9 @@ function toProgress(row: ProgressRow): AnalysisProgress {
     queuedSegments: Number(row.queued_segments),
     processingSegments: Number(row.processing_segments),
     completedSegments: Number(row.completed_segments),
-    failedSegments: Number(row.failed_segments)
+    failedSegments: Number(row.failed_segments),
+    usage: null,
+    cost: null
   });
 }
 
@@ -369,6 +372,65 @@ export class DocumentRepository {
     `, [documentId]);
 
     return row ? toProgress(row) : undefined;
+  }
+
+  /**
+   * 聚合一篇文章历次分析请求的 token 用量。
+   *
+   * 同一个 batch 的 usage 会被原样写进该批每个 segment 的 usage_json（同批共享一份用量），
+   * 直接求和会把一次请求的 token 重复计 N 次，因此按 usage_json 字符串去重后只计一次。
+   * 返回最后一个出现（实际是任意一个）非 null model 与聚合后的 LlmUsage；
+   * 没有任何用量数据时返回 undefined。
+   */
+  public getAnalysisCost(
+    documentId: string
+  ): { model: string; usage: LlmUsage } | undefined {
+    const rows = this.database.all<{ model: string; usage_json: string | null }>(`
+      SELECT sa.model, sa.usage_json
+      FROM segment_analyses sa
+      INNER JOIN segments s ON s.id = sa.segment_id
+      WHERE s.document_id = ?
+    `, [documentId]);
+    if (rows.length === 0) {
+      return undefined;
+    }
+
+    const seen = new Set<string>();
+    let model: string | null = null;
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let cachedInputTokens = 0;
+    for (const row of rows) {
+      if (!row.usage_json || row.usage_json === "null" || seen.has(row.usage_json)) {
+        continue;
+      }
+      seen.add(row.usage_json);
+      let usage: LlmUsage | null;
+      try {
+        usage = JSON.parse(row.usage_json) as LlmUsage | null;
+      } catch {
+        continue;
+      }
+      if (!usage) {
+        continue;
+      }
+      model ??= row.model;
+      inputTokens += usage.inputTokens ?? 0;
+      outputTokens += usage.outputTokens ?? 0;
+      cachedInputTokens += usage.cachedInputTokens ?? 0;
+    }
+
+    return model
+      ? {
+          model,
+          usage: {
+            inputTokens,
+            outputTokens,
+            totalTokens: inputTokens + outputTokens,
+            cachedInputTokens
+          }
+        }
+      : undefined;
   }
 
   public getSegmentsForAnalysis(documentId: string): Segment[] {

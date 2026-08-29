@@ -93,6 +93,7 @@ PATCH  /api/documents/:documentId/blocks/:blockId
 PATCH  /api/segments/:segmentId/annotations
 
 GET    /api/search?q=...&status=...
+GET    /api/llm/balance   # 服务端代理余额查询，只回传脱敏 key（2026-08-29 深夜新增）
 ```
 
 以下接口仅作为后续 TTS 播放预留，不属于当前版本：
@@ -347,6 +348,12 @@ hash(sourceText, tokenizerVersion, promptVersion, model, canonicalSchemaVersion)
 ```text
 targetLevel, explanationVersion
 ```
+
+**费用估算（2026-08-29 深夜新增）**：usage（含 DeepSeek 缓存命中 token）随每次分析落库；
+`llm-pricing.ts` 内置 deepseek-v4-flash 单价表（元/百万 tokens，输入区分缓存命中/未命中、高峰/闲时），
+按文章聚合时以 usage_json 去重（同批次的 N 个句段共享同一份 usage，只能计一次），
+再按估算发起时刻的高峰/闲时档折算为人民币，随 progress 的 `usage`/`cost` 字段返回前端展示。
+模型不在价格表内时 `cost=null`；价格表需随官方定价变动人工更新。
 
 ## 八、隐私和错误处理
 

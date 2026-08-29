@@ -20,6 +20,7 @@ import {
   ProviderRequestError,
   type AnalysisRequest,
   type LlmAnalysisResult,
+  type LlmBalance,
   type LlmProtocol,
   type LlmProvider
 } from "./types.js";
@@ -52,12 +53,37 @@ const segmentIdSchema = z.object({
   segmentId: z.string().min(1)
 }).passthrough();
 
+/**
+ * DeepSeek 余额响应（snake_case 原始形态）：
+ * GET {baseUrl}/user/balance，header Authorization: Bearer <KEY>
+ * 见 https://api-docs.deepseek.com/zh-cn/api/get-user-balance
+ * granted_balance / topped_up_balance 可能为 null（未赠送/未充值）。
+ */
+const balanceEntryResponseSchema = z.object({
+  currency: z.string().min(1),
+  total_balance: z.string().min(1),
+  granted_balance: z.string().nullable(),
+  topped_up_balance: z.string().nullable()
+});
+const balanceResponseSchema = z.object({
+  is_available: z.boolean(),
+  balance_infos: z.array(balanceEntryResponseSchema).min(1)
+});
+
+/** 只留首尾，中间打码：sk-49af…be98。完整 key 绝不离开服务端。 */
+function maskApiKey(apiKey: string): string {
+  if (apiKey.length <= 8) {
+    return `${apiKey.slice(0, 2)}…${apiKey.length > 2 ? "".padEnd(Math.min(4, apiKey.length - 2), "*") : ""}`;
+  }
+  return `${apiKey.slice(0, 4)}…${apiKey.slice(-4)}`;
+}
+
 const systemPrompt = `You are NihongoNote, a careful Japanese language tutor.
 Analyze the supplied Japanese sentence or dialogue segment for a Chinese-speaking learner.
 Return JSON only. The JSON must have exactly one top-level key named "analyses", whose value is an array.
 For every supplied segment, return exactly one analysis with the same segmentId.
 
-Each analysis must contain:
+Each analysis must contain all of the following top-level fields and none may be omitted:
 - segmentId
 - translation: a natural Chinese translation
 - grammarSummary: the important grammar and sentence structure
@@ -67,6 +93,8 @@ Each analysis must contain:
 - replyReason: why this reply follows the surrounding dialogue, or null when there is no dialogue context
 - uncertaintyNote: a clear uncertainty note or null
 - tokens: one entry for every boundary listed under that segment's tokenBoundaries
+Omitting any top-level field — including politeness, tone, grammarSummary or translation — invalidates
+that analysis, so emit every one of them for every segment.
 
 Each token must contain all of the following fields and none may be omitted: tokenId, startOffset,
 endOffset, surface, category, lemma, reading, partOfSpeech, conjugation, gloss, particleFunction,
@@ -563,6 +591,15 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
       analyses.push(parsed.data);
     }
 
+    const rawUsage = usage as OpenAI.Completions.CompletionUsage & {
+      prompt_cache_hit_tokens?: number;
+      prompt_cache_miss_tokens?: number;
+      prompt_tokens_details?: { cached_tokens?: number };
+    };
+    const cachedInputTokens = rawUsage.prompt_cache_hit_tokens
+      ?? rawUsage.prompt_tokens_details?.cached_tokens
+      ?? null;
+
     return {
       analyses,
       failures,
@@ -570,9 +607,53 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
         ? {
             inputTokens: usage.prompt_tokens ?? null,
             outputTokens: usage.completion_tokens ?? null,
-            totalTokens: usage.total_tokens ?? null
+            totalTokens: usage.total_tokens ?? null,
+            cachedInputTokens
           }
         : null
+    };
+  }
+
+  public async fetchBalance(): Promise<LlmBalance | null> {
+    if (!this.apiKey) {
+      return null;
+    }
+    const url = new URL("user/balance", `${this.config.baseUrl.replace(/\/+$/u, "")}/`).toString();
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${this.apiKey}`
+        },
+        signal: AbortSignal.timeout(this.timeoutMs)
+      });
+    } catch (error) {
+      const detail = sanitizedErrorMessage(error, this.apiKey);
+      throw new ProviderRequestError(`Balance request failed: ${detail}`);
+    }
+    if (!response.ok) {
+      throw new ProviderRequestError(
+        `Balance request failed with status ${response.status}`,
+        response.status
+      );
+    }
+    const payload = await response.json() as unknown;
+    const parsed = balanceResponseSchema.safeParse(payload);
+    if (!parsed.success) {
+      throw new ProviderRequestError("Balance response did not match the expected shape");
+    }
+    return {
+      isAvailable: parsed.data.is_available,
+      apiKeyMasked: maskApiKey(this.apiKey),
+      model: this.model,
+      baseUrl: this.config.baseUrl,
+      entries: parsed.data.balance_infos.map((entry) => ({
+        currency: entry.currency,
+        totalBalance: entry.total_balance,
+        grantedBalance: entry.granted_balance,
+        toppedUpBalance: entry.topped_up_balance
+      }))
     };
   }
 }

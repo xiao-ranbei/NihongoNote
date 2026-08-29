@@ -18,7 +18,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { tokenAnalysisSchema } from "@nihongonote/core";
+import { segmentAnalysisSchema, tokenAnalysisSchema } from "@nihongonote/core";
 
 import {
   measureSourceCoverage,
@@ -32,6 +32,10 @@ import {
   packingSafetyRatio,
   planBatches
 } from "../src/llm-budget.js";
+import {
+  estimateCost,
+  isPeakHour
+} from "../src/llm-pricing.js";
 
 /**
  * 子进程分支：写完不调 close() 就退出。
@@ -284,6 +288,38 @@ check("confidence 越界数值仍被 schema 拒绝", () => {
   return "1.5 / -0.1 仍被拒绝";
 });
 
+console.log("=== 契约容错：analysis 缺顶层字段 ===");
+// 与 token 缺 confidence 同类：模型在 reasoning 模式下会省略它认为"不重要"的顶层字段
+// （实测 politeness: Required 让整段作废）。顶层字段统一降级为 null，UI 显示「未提供」。
+const minimalAnalysis = {
+  segmentId: "seg:0",
+  tokens: [minimalToken]
+};
+check("analysis 缺 politeness/translation/tone 时降级为 null 而不是整段失败", () => {
+  const parsed = segmentAnalysisSchema.parse(minimalAnalysis);
+  assert.equal(parsed.politeness, null, "缺 politeness 应降级为 null");
+  assert.equal(parsed.translation, null, "缺 translation 应降级为 null");
+  assert.equal(parsed.tone, null, "缺 tone 应降级为 null");
+  assert.equal(parsed.grammarSummary, null, "缺 grammarSummary 应降级为 null");
+  return "顶层字段缺 → null，不再报 Required";
+});
+check("segmentId 缺失仍被拒绝（定位依据不可降级）", () => {
+  assert.throws(
+    () => segmentAnalysisSchema.parse({ tokens: [] }),
+    /segmentId/,
+    "segmentId 是定位依据，缺了不该被放过"
+  );
+  return "缺 segmentId 仍拒绝";
+});
+check("tokens 缺失仍被拒绝（分析核心不可降级）", () => {
+  assert.throws(
+    () => segmentAnalysisSchema.parse({ segmentId: "seg:0" }),
+    /tokens/,
+    "tokens 是分析核心，缺了不该被放过"
+  );
+  return "缺 tokens 仍拒绝";
+});
+
 console.log("=== 装箱：按估算成本而非固定段数 ===");
 const packingBudget = Math.floor(hardMaxCompletionTokens * packingSafetyRatio);
 const longSegment = { id: "long", text: "あ".repeat(92) };
@@ -423,6 +459,72 @@ check("A-1 进程直接退出时补写", () => {
     `写入未被补写，子进程退出前的数据丢了（读到 ${crashRows} 行）`
   );
   return "未调用 close() 的写入在 exit 钩子里补写成功";
+});
+
+console.log("=== 费用估算：高峰时段与单价 ===");
+// 2026-08-31 是周一、2026-09-05 是周六、2026-09-04 是周五（以 2026-08-28 周五为锚点推算）。
+// isPeakHour 用「本地时间 + 8h 再读 UTC 分量」得到北京时间，测试用 UTC 时刻直接构造。
+const monday = (beijingHour: number, minute = 0): Date =>
+  new Date(`2026-08-31T${String(beijingHour - 8).padStart(2, "0")}:${String(minute).padStart(2, "0")}:00Z`);
+const weekday = (date: string): Date => new Date(date);
+
+check("高峰时段：周一 9:00 含端点，12:00 不含", () => {
+  assert.equal(isPeakHour(monday(9)), true, "9:00 属于高峰（含左端点）");
+  assert.equal(isPeakHour(monday(12)), false, "12:00 不属于高峰（不含右端点）");
+  return "9:00→高峰，12:00→闲时";
+});
+check("高峰时段：周五 18:00 不含，周二 15:00 含", () => {
+  assert.equal(isPeakHour(weekday("2026-09-04T10:00:00Z")), false, "周五 18:00 北京应是闲时");
+  assert.equal(isPeakHour(weekday("2026-09-01T07:00:00Z")), true, "周二 15:00 北京应是高峰");
+  return "18:00 后→闲时，15:00→高峰";
+});
+check("高峰时段：周末全天闲时", () => {
+  assert.equal(isPeakHour(weekday("2026-08-30T02:00:00Z")), false, "周日 10:00 北京应是闲时");
+  assert.equal(isPeakHour(weekday("2026-09-05T02:00:00Z")), false, "周六 10:00 北京应是闲时");
+  return "周六/周日 → 闲时";
+});
+check("费用：闲时输入未命中 1.5 元/百万、输出 4.5 元/百万", () => {
+  const cost = estimateCost("deepseek-v4-flash", {
+    inputTokens: 1_000_000,
+    outputTokens: 1_000_000,
+    totalTokens: 2_000_000,
+    cachedInputTokens: 0
+  }, monday(8));
+  assert.ok(cost, "内置模型应能估算费用");
+  assert.equal(cost!.tier, "off-peak");
+  assert.ok(Math.abs(cost!.inputCost - 1.5) < 1e-9, `输入费用 ${cost!.inputCost} 应为 1.5`);
+  assert.ok(Math.abs(cost!.outputCost - 4.5) < 1e-9, `输出费用 ${cost!.outputCost} 应为 4.5`);
+  assert.ok(Math.abs(cost!.totalCost - 6.0) < 1e-9, `合计费用 ${cost!.totalCost} 应为 6.0`);
+  return `输入 ¥${cost!.inputCost.toFixed(4)} + 输出 ¥${cost!.outputCost.toFixed(4)} = ¥${cost!.totalCost.toFixed(4)}`;
+});
+check("费用：缓存命中输入走 0.05 元/百万（闲时），高峰翻倍", () => {
+  const offPeak = estimateCost("deepseek-v4-flash", {
+    inputTokens: 1_000_000,
+    outputTokens: 0,
+    totalTokens: 1_000_000,
+    cachedInputTokens: 1_000_000
+  }, monday(8));
+  assert.ok(Math.abs(offPeak!.inputCost - 0.05) < 1e-9, "缓存命中闲时应为 0.05 元/百万");
+  const peak = estimateCost("deepseek-v4-flash", {
+    inputTokens: 1_000_000,
+    outputTokens: 1_000_000,
+    totalTokens: 2_000_000,
+    cachedInputTokens: 1_000_000
+  }, monday(10));
+  assert.equal(peak!.tier, "peak");
+  assert.ok(Math.abs(peak!.inputCost - 0.10) < 1e-9, "缓存命中高峰应为 0.10 元/百万");
+  assert.ok(Math.abs(peak!.outputCost - 9.0) < 1e-9, "输出高峰应为 9.0 元/百万");
+  return `缓存命中闲时 ¥0.05/百万，高峰 ¥0.10/百万；输出高峰 ¥9.0/百万`;
+});
+check("费用：未知模型与空用量返回 null，不编数", () => {
+  assert.equal(estimateCost("gpt-4o", {
+    inputTokens: 100,
+    outputTokens: 100,
+    totalTokens: 200,
+    cachedInputTokens: 0
+  }, new Date()), null, "未内置价格的模型应返回 null");
+  assert.equal(estimateCost("deepseek-v4-flash", null, new Date()), null, "空用量应返回 null");
+  return "未知模型/空用量 → null";
 });
 
 console.log("");

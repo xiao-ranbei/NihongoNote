@@ -28,6 +28,27 @@ export interface LlmUsage {
   inputTokens: number | null;
   outputTokens: number | null;
   totalTokens: number | null;
+  /**
+   * DeepSeek 特有：缓存命中的输入 token（prompt_cache_hit_tokens）。
+   * 命中部分的单价远低于未命中部分，计费必须分开。
+   */
+  cachedInputTokens?: number | null;
+}
+
+export interface LlmBalanceEntry {
+  currency: string;
+  totalBalance: string;
+  grantedBalance: string | null;
+  toppedUpBalance: string | null;
+}
+
+export interface LlmBalance {
+  isAvailable: boolean;
+  /** 脱敏后的 API key（如 sk-49af…be98），供前端展示，绝不回传完整 key。 */
+  apiKeyMasked: string;
+  model: string;
+  baseUrl: string;
+  entries: LlmBalanceEntry[];
 }
 
 export interface LlmAnalysisResult {
@@ -50,6 +71,11 @@ export interface LlmProvider {
    */
   readonly completionTokenBudget: number;
   analyze(request: AnalysisRequest): Promise<LlmAnalysisResult>;
+  /**
+   * 查询当前账号余额。provider 未配置或无余额接口时返回 null。
+   * 抛 ProviderRequestError 表示查询失败（网络/鉴权/非 2xx）。
+   */
+  fetchBalance(): Promise<LlmBalance | null>;
 }
 
 export interface TtsRequest {

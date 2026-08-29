@@ -2,7 +2,6 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 
 import { AnalysisService } from "../services/analysis-service.js";
-import { DocumentRepository } from "../repositories/document-repository.js";
 import type { LlmProvider } from "../providers/types.js";
 
 interface DocumentParams {
@@ -42,7 +41,6 @@ function providerNotConfigured(reply: {
 
 export function registerAnalysisRoutes(
   app: FastifyInstance,
-  repository: DocumentRepository,
   service: AnalysisService,
   provider: LlmProvider
 ): void {
@@ -96,7 +94,8 @@ export function registerAnalysisRoutes(
     if (!params.success) {
       return invalidInput(reply, params.error.flatten());
     }
-    const progress = repository.getAnalysisProgress(params.data.documentId);
+    // 经 service 统一附加用量/费用（usage/cost），避免与 start/cancel/retry 口径不一致
+    const progress = service.getProgress(params.data.documentId);
     if (!progress) {
       return reply.code(404).send({
         error: "DOCUMENT_NOT_FOUND",

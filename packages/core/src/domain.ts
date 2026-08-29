@@ -138,13 +138,16 @@ export type TokenAnalysis = z.infer<typeof tokenAnalysisSchema>;
 
 export const segmentAnalysisSchema = z.object({
   segmentId: z.string().min(1),
-  translation: z.string().min(1),
-  grammarSummary: z.string().min(1),
-  tone: z.string().min(1),
-  politeness: z.string().min(1),
-  impliedMeaning: z.string().min(1).nullable(),
-  replyReason: z.string().min(1).nullable(),
-  uncertaintyNote: z.string().min(1).nullable(),
+  // 模型偶发省略顶层字段（实测 politeness: Required，与 token 的 confidence 同类问题）。
+  // 单字段缺失降级为 null（UI 显示「未提供」），不让整段 29 个正确字段一起作废。
+  // 注意：segmentId 与 tokens 保持 Required —— 缺了它们本段分析没有定位依据。
+  translation: z.string().min(1).nullable().default(null),
+  grammarSummary: z.string().min(1).nullable().default(null),
+  tone: z.string().min(1).nullable().default(null),
+  politeness: z.string().min(1).nullable().default(null),
+  impliedMeaning: z.string().min(1).nullable().default(null),
+  replyReason: z.string().min(1).nullable().default(null),
+  uncertaintyNote: z.string().min(1).nullable().default(null),
   tokens: z.array(tokenAnalysisSchema)
 });
 export type SegmentAnalysis = z.infer<typeof segmentAnalysisSchema>;
@@ -238,9 +241,55 @@ export const analysisProgressSchema = z.object({
   queuedSegments: z.number().int().nonnegative(),
   processingSegments: z.number().int().nonnegative(),
   completedSegments: z.number().int().nonnegative(),
-  failedSegments: z.number().int().nonnegative()
+  failedSegments: z.number().int().nonnegative(),
+  /**
+   * 本篇文章历次分析请求的 token 用量聚合（同批次只计一次）。
+   * 尚无任何分析记录时（status=draft）为 null。
+   */
+  usage: z.object({
+    inputTokens: z.number().int().nonnegative().nullable(),
+    outputTokens: z.number().int().nonnegative().nullable(),
+    totalTokens: z.number().int().nonnegative().nullable(),
+    cachedInputTokens: z.number().int().nonnegative().nullable()
+  }).nullable(),
+  /**
+   * 按模型内置单价与当前高峰/闲时估算出的累计费用（元）。
+   * 模型不在内置价格表内，或没有用量数据时为 null。
+   */
+  cost: z.object({
+    model: z.string().min(1),
+    currency: z.literal("CNY"),
+    tier: z.enum(["peak", "off-peak"]),
+    cachedInputTokens: z.number().int().nonnegative(),
+    uncachedInputTokens: z.number().int().nonnegative(),
+    outputTokens: z.number().int().nonnegative(),
+    inputCost: z.number().nonnegative(),
+    outputCost: z.number().nonnegative(),
+    totalCost: z.number().nonnegative()
+  }).nullable()
 });
 export type AnalysisProgress = z.infer<typeof analysisProgressSchema>;
+
+export const llmBalanceEntrySchema = z.object({
+  currency: z.string().min(1),
+  totalBalance: z.string().min(1),
+  grantedBalance: z.string().nullable(),
+  toppedUpBalance: z.string().nullable()
+});
+export type LlmBalanceEntry = z.infer<typeof llmBalanceEntrySchema>;
+
+/**
+ * 服务端代理 DeepSeek /user/balance 后的响应。
+ * apiKeyMasked 只含脱敏 key（sk-49af…be98），完整 key 不出服务端。
+ */
+export const llmBalanceSchema = z.object({
+  isAvailable: z.boolean(),
+  apiKeyMasked: z.string().min(1),
+  model: z.string().min(1),
+  baseUrl: z.string().url(),
+  entries: z.array(llmBalanceEntrySchema).min(1)
+});
+export type LlmBalance = z.infer<typeof llmBalanceSchema>;
 
 export const healthResponseSchema = z.object({
   status: z.literal("ok"),

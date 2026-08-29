@@ -533,7 +533,8 @@ h2 {
 .status-pill,
 .foundation-badge,
 .status-label,
-.count-badge {
+.count-badge,
+.balance-pill {
   align-items: center;
   border-radius: 999px;
   display: inline-flex;
@@ -544,6 +545,22 @@ h2 {
 .status-pill {
   gap: 8px;
   padding: 9px 13px;
+}
+
+.balance-pill {
+  gap: 6px;
+  padding: 9px 13px;
+  white-space: nowrap;
+}
+
+.balance-ready {
+  background: var(--tint-neutral);
+  color: var(--ink-soft);
+}
+
+.balance-muted {
+  background: var(--tint-neutral);
+  color: var(--muted);
 }
 
 .status-ready {
@@ -1129,11 +1146,25 @@ h2 {
   margin: 9px 0 0;
 }
 
+.progress-cost {
+  color: var(--muted-soft);
+  font-size: 0.7rem;
+  margin: 9px 0 0;
+}
+
+.progress-cost strong {
+  color: var(--ink-soft);
+}
+
+.progress-cost-note {
+  color: var(--muted);
+}
+
 .analysis-panel {
   background: var(--panel-soft);
   border: 1px solid var(--line-soft);
   border-radius: 14px;
-  margin-top: 24px;
+  margin-top: 0;
   padding: 20px;
 }
 
@@ -1658,22 +1689,25 @@ h2 {
   padding-top: 14px;
 }
 
-/* [layout] 解析面板 sticky 跟随；magazine 布局变体应覆写为 static + 注释栏样式 */
-.analysis-panel {
+/* [layout] 右侧注释列：SENTENCE NOTE + WORD NOTE 上下排列，整列 sticky 跟随；
+ * 侧栏总高超过视口时 sticky 自动失效、退化为正常滚动；magazine 布局变体应覆写为 static */
+.notes-column {
   align-self: start;
-  margin-top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
   position: sticky;
   top: 20px;
 }
 
 .token-popover {
-  background: var(--hover-soft);
-  border: 1px solid var(--line-strong);
-  border-radius: 13px;
-  box-shadow: 0 12px 26px var(--shadow-card);
+  background: var(--panel-soft);
+  border: 1px solid var(--line-soft);
+  border-radius: 14px;
   font-family: var(--font-ui);
-  margin: 23px -8px -8px;
-  padding: 16px;
+  margin: 0;
+  padding: 20px;
 }
 
 .token-popover-heading {
@@ -1771,7 +1805,7 @@ h2 {
     grid-template-columns: 1fr;
   }
 
-  .analysis-panel {
+  .notes-column {
     position: static;
   }
 }

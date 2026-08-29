@@ -12,6 +12,7 @@ import type {
   DocumentDetail,
   DocumentSummary,
   HealthResponse,
+  LlmBalance,
   TargetLevel,
   TokenAnalysis,
   TokenCategory,
@@ -24,6 +25,7 @@ import {
   getAnalysisProgress,
   getDocument,
   getHealth,
+  getLlmBalance,
   listDocuments,
   retrySegment,
   startDocumentAnalysis,
@@ -112,6 +114,17 @@ function statusLabel(status: DocumentDetail["status"] | DocumentDetail["segments
 
 function contentTypeLabel(value: ContentType | null | undefined): string {
   return value ? contentTypeLabels[value] : "未选择类型";
+}
+
+/** 余额取第一个币种条目展示（当前 DeepSeek 只返回 CNY）。 */
+function balanceSummary(balance: LlmBalance | null): string | null {
+  const entry = balance?.entries[0];
+  return entry ? `${entry.currency} ${entry.totalBalance}` : null;
+}
+
+/** 金额很小（一次分析通常不足 1 元），小额显示 4 位小数，大额显示 2 位。 */
+function formatCost(cost: number): string {
+  return cost >= 1 ? `¥${cost.toFixed(2)}` : `¥${cost.toFixed(4)}`;
 }
 
 function documentContentType(document: MvpDocument): ContentType {
@@ -759,14 +772,14 @@ function SegmentAnalysisPanel({
         </form>
       ) : displayedAnalysis ? (
         <>
-          <p className="analysis-translation">{displayedAnalysis.translation}</p>
+          <p className="analysis-translation">{displayedAnalysis.translation ?? "（未提供译文）"}</p>
           <div className="analysis-tags">
-            <span>{displayedAnalysis.tone}</span>
-            <span>{displayedAnalysis.politeness}</span>
+            <span>{displayedAnalysis.tone ?? "（未提供）"}</span>
+            <span>{displayedAnalysis.politeness ?? "（未提供）"}</span>
           </div>
           <div className="analysis-block">
             <strong>语法与结构</strong>
-            <p>{displayedAnalysis.grammarSummary}</p>
+            <p>{displayedAnalysis.grammarSummary ?? "（未提供）"}</p>
           </div>
           {displayedAnalysis.impliedMeaning ? (
             <div className="analysis-block">
@@ -827,6 +840,7 @@ export default function App(): ReactElement {
     return isLibraryStatus(value) ? value : "all";
   });
   const [error, setError] = useState<string | null>(null);
+  const [llmBalance, setLlmBalance] = useState<LlmBalance | null>(null);
 
   useEffect(() => {
     void getHealth()
@@ -839,6 +853,26 @@ export default function App(): ReactElement {
       .finally(() => {
         setIsLoading(false);
       });
+  }, []);
+
+  // 余额查询是附加信息：未配置 provider / 查询失败都静默降级为 null（UI 显示「余额未知」），
+  // 不阻塞页面也不弹错误横幅。
+  useEffect(() => {
+    let cancelled = false;
+    void getLlmBalance()
+      .then((balance) => {
+        if (!cancelled) {
+          setLlmBalance(balance);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setLlmBalance(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -1143,6 +1177,16 @@ export default function App(): ReactElement {
             </span>
             {isLibraryOpen ? "隐藏学习库" : "显示学习库"}
           </button>
+          <div
+            className={`balance-pill ${llmBalance ? "balance-ready" : "balance-muted"}`}
+            title={llmBalance
+              ? `模型：${llmBalance.model} · ${llmBalance.baseUrl}`
+              : "未配置 LLM 或余额查询失败"}
+          >
+            {llmBalance
+              ? `${llmBalance.apiKeyMasked} · ${balanceSummary(llmBalance)}`
+              : "余额未知"}
+          </div>
           <div className={`status-pill ${health ? "status-ready" : "status-muted"}`}>
             <span className="status-dot" />
             {health ? "本机服务已连接" : isLoading ? "正在连接…" : "服务未连接"}
@@ -1372,6 +1416,30 @@ export default function App(): ReactElement {
                       {analysisProgress.failedSegments} 个句段失败，可以点击对应句子后单独重试。
                     </p>
                   ) : null}
+                  {analysisProgress.usage ? (
+                    <p className="progress-cost">
+                      {analysisProgress.cost ? (
+                        <>
+                          本次已花费{" "}
+                          <strong>{formatCost(analysisProgress.cost.totalCost)}</strong>
+                          <span className="progress-cost-note">
+                            （{analysisProgress.cost.tier === "peak" ? "高峰" : "闲时"}计价
+                            · 输入 {analysisProgress.cost.cachedInputTokens.toLocaleString()} 缓存
+                            + {analysisProgress.cost.uncachedInputTokens.toLocaleString()} 未命中
+                            / 输出 {analysisProgress.cost.outputTokens.toLocaleString()}）
+                          </span>
+                        </>
+                      ) : (
+                        "费用：该模型暂无内置价格表（价格未知）"
+                      )}
+                      {analysisProgress.usage.totalTokens !== null ? (
+                        <span className="progress-cost-note">
+                          {" · "}
+                          累计 {analysisProgress.usage.totalTokens.toLocaleString()} tokens
+                        </span>
+                      ) : null}
+                    </p>
+                  ) : null}
                 </div>
               ) : null}
               <div className="reader-layout">
@@ -1408,14 +1476,7 @@ export default function App(): ReactElement {
                         }
                       )}
                     </div>
-                    {selectedToken && selectedSegment ? (
-                      <TokenPopover
-                        isSaving={isSavingSegment}
-                        onClose={() => setSelectedTokenId(null)}
-                        onSave={(_tokenId, override) => handleSaveToken(selectedSegment.id, override)}
-                        token={selectedToken}
-                      />
-                    ) : (
+                    {selectedToken ? null : (
                       <p className="article-hint">
                         {selectedDocument.status === "ready"
                           ? "点击一个彩色词块，打开对应的词语解析。"
@@ -1424,15 +1485,25 @@ export default function App(): ReactElement {
                     )}
                   </div>
                 </div>
-                {selectedSegment ? (
-                  <SegmentAnalysisPanel
-                    isRetrying={retryingSegmentId === selectedSegment.id}
-                    isSaving={isSavingSegment}
-                    onRetry={() => void handleRetrySegment(selectedSegment.id)}
-                    onSave={handleSaveSegment}
-                    segment={selectedSegment}
-                  />
-                ) : null}
+                <div className="notes-column">
+                  {selectedSegment ? (
+                    <SegmentAnalysisPanel
+                      isRetrying={retryingSegmentId === selectedSegment.id}
+                      isSaving={isSavingSegment}
+                      onRetry={() => void handleRetrySegment(selectedSegment.id)}
+                      onSave={handleSaveSegment}
+                      segment={selectedSegment}
+                    />
+                  ) : null}
+                  {selectedToken && selectedSegment ? (
+                    <TokenPopover
+                      isSaving={isSavingSegment}
+                      onClose={() => setSelectedTokenId(null)}
+                      onSave={(_tokenId, override) => handleSaveToken(selectedSegment.id, override)}
+                      token={selectedToken}
+                    />
+                  ) : null}
+                </div>
               </div>
             </article>
           ) : (

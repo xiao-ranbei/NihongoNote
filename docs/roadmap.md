@@ -319,3 +319,36 @@ d7b143c0-...:segment:3：LLM analysis did not match the schema (tokens.0.confide
 验证：`pnpm typecheck` 全绿；`pnpm --filter @nihongonote/api verify` **30/30 通过**（27 → 30）。是否跑下一轮完整回归以确认 55/55 待定（预计约 35 分钟、与上一轮同量级 token）。
 
 **当前可靠性**：样本 1 30/30（100%），样本 2 23/25（92%），合计约 96%（上一轮 89%）。缺陷 3 是此前唯一已知失败原因，已修——下一轮完整回归若两样本均无失败，LLM-002 可靠性维度即可判定达标。
+
+### 2026-08-29 傍晚：用户实测反馈与修复（缺陷 4 顶层字段缺失 + UI 布局）
+
+用户启动应用实测「场景1」（30 句段）：29 成功 / 1 失败，并反馈两个体验问题。
+
+**缺陷 4（顶层字段缺失）——已修。** 失败句段报 `politeness: Required`——模型整段省略了顶层 `politeness` 字段，与缺陷 3（token 漏 confidence）同源：reasoning 模式下模型会省略它认为"不重要"的字段。后果更重：politeness 缺失让整段 29 个正确字段一起作废。
+
+修复（与缺陷 3 同思路，已实施并验证）：
+1. **契约层**：`segmentAnalysisSchema` 的 7 个内容字段（translation / grammarSummary / tone / politeness / impliedMeaning / replyReason / uncertaintyNote）统一 `nullable().default(null)`——单字段缺失降级为「未提供」；`segmentId` 与 `tokens` 保持 Required（定位依据与分析核心不可降级）。
+2. **提示词层**：v4 → v5，「每个 analysis 的全部 9 个顶层字段必须输出、不得省略」。
+3. **UI**：降级字段显示「（未提供）」而非空白；编辑表单本就用 `?? ""` 兼容。
+4. **离线断言**：verify 30 → 33（analysis 缺顶层字段降级 / segmentId 缺失拒绝 / tokens 缺失拒绝）。
+5. 修复已验证：`pnpm typecheck` 全绿、`pnpm --filter @nihongonote/api verify` **33/33**。
+
+**UI 布局（用户反馈）——已改。** WORD NOTE 原渲染在原文正下方（内联卡片），用户指出应像 SENTENCE NOTE 一样放侧面。已改为右侧注释列（`.notes-column`）：SENTENCE NOTE 在上、WORD NOTE 在下，整列 sticky 跟随，超高自动退化为滚动；窄屏（≤1000px）解除 sticky。原文下方只保留操作提示。
+
+**待决策（慢）**：用户实测 30 句段耗时约 10–20 分钟，体感"特别慢"。根源是 `reasoning_effort=medium`（推理 token 占输出 72.8%）。选项：保持 medium / 降 low / 降 minimal。降档可显著提速，但需先跑回归验证质量——建议降 low 后用两篇样本验证，通过即切换。
+
+### 2026-08-29 深夜：用户新需求（推理降档 + 余额/费用可视化）
+
+用户两项新决策/新需求，已排入队列 #8–#11：
+
+1. **`reasoning_effort` 降为 `minimal`（#8，用户直接拍板）。** 不再走"先降 low 再验证"的中间路线，直接降 minimal。改动范围：`config.ts` 默认值 `medium → minimal`、`.env` / `.env.example` 同步。回归验证顺延：切换后跑两篇样本，确认质量没有因降档塌陷，同时观察墙钟与 token 消耗下降幅度（理论上推理 token 占比应显著下降，这本身就是提速 + 省钱的双重收益）。
+2. **余额查询 + 单次分析费用统计（#9–#11）。** 参考 DeepSeek 官方文档：
+   - 余额：`GET {baseUrl}/user/balance`（`Authorization: Bearer <KEY>`），响应 `is_available` + `balance_infos[]`（`total_balance` / `granted_balance` / `topped_up_balance` 均为字符串，后两者可为 null）。
+   - 定价（已核对官方页，deepseek-v4-flash，元/百万 tokens）：输入（缓存命中）闲 0.05 / 峰 0.10；输入（未命中）闲 1.5 / 峰 3.0；输出 闲 4.5 / 峰 9.0。高峰 = 北京时区周一至周五 9:00–12:00、14:00–18:00。
+   - 实现要点：
+     - 后端新端点 `GET /api/llm/balance`，服务端代理余额请求并**只回传脱敏 key**（`sk-49af…be98`），完整 key 不出服务端；
+     - 费用统计基于已落库的 `segment_analyses.usage_json`（含缓存命中 token，按 usage_json 去重避免同批重复计费），用内置价格表按当前高峰/闲时估算，随 progress 返回（`usage` + `cost` 字段）；
+     - 模型不在内置价格表内时 `cost=null`，前端显示「价格未知」，不编数；
+     - 前端顶栏显示余额，进度区显示本次累计费用与 token 用量。
+
+**代价**：费用是估算（按发起请求的时刻计价，实际扣费可能因批次执行跨越高峰边界有微小差异）；余额查询失败（网络/鉴权/非 2xx）不阻塞应用，前端显示「余额未知」。

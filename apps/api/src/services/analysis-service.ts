@@ -7,6 +7,7 @@ import {
 
 import { DocumentRepository } from "../repositories/document-repository.js";
 import { packingSafetyRatio, planBatches } from "../llm-budget.js";
+import { estimateCost } from "../llm-pricing.js";
 import type {
   LlmAnalysisResult,
   LlmProvider,
@@ -90,6 +91,32 @@ export class AnalysisService {
     private readonly batchConcurrency = 2
   ) {}
 
+  /**
+   * 进度 + 用量 + 费用。
+   *
+   * 进度本身只统计句段状态；用量/费用是附加信息，由 repository 聚合 usage_json、
+   * 再按 provider 当前模型的内置价格表折算（模型不在表内则 cost 为 null）。
+   * 所有对外返回进度的入口（start / cancel / retry / 轮询）都走这里，保证口径一致。
+   */
+  public getProgress(documentId: string): AnalysisProgress | undefined {
+    const progress = this.repository.getAnalysisProgress(documentId);
+    if (!progress) {
+      return undefined;
+    }
+    const costInfo = this.repository.getAnalysisCost(documentId);
+    const usage = costInfo
+      ? {
+          inputTokens: costInfo.usage.inputTokens,
+          outputTokens: costInfo.usage.outputTokens,
+          totalTokens: costInfo.usage.totalTokens,
+          // getAnalysisCost 聚合后必然有值，但类型上是可空字段，显式归一为 null
+          cachedInputTokens: costInfo.usage.cachedInputTokens ?? null
+        }
+      : null;
+    const cost = costInfo ? estimateCost(costInfo.model, costInfo.usage) : null;
+    return { ...progress, usage, cost };
+  }
+
   public start(documentId: string): AnalysisProgress | undefined {
     const existingProgress = this.repository.getAnalysisProgress(documentId);
     if (!existingProgress) {
@@ -107,7 +134,7 @@ export class AnalysisService {
       run.completion = this.process(documentId, run);
     }
 
-    return this.repository.getAnalysisProgress(documentId);
+    return this.getProgress(documentId);
   }
 
   public retrySegment(segmentId: string): AnalysisProgress | undefined {
@@ -129,11 +156,13 @@ export class AnalysisService {
     }
     const run = this.activeRuns.get(documentId);
     if (!run) {
-      return progress;
+      return this.getProgress(documentId);
     }
     this.activeRuns.delete(documentId);
     run.controller.abort(new DOMException("Analysis cancelled by user", "AbortError"));
-    return this.repository.markDocumentAnalysisCancelled(documentId);
+    return this.repository.markDocumentAnalysisCancelled(documentId)
+      ? this.getProgress(documentId)
+      : undefined;
   }
 
   public cancelAll(): void {

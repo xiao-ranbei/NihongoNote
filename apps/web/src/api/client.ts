@@ -4,6 +4,7 @@ import {
   documentDetailSchema,
   documentSummarySchema,
   healthResponseSchema,
+  llmBalanceSchema,
   segmentViewSchema,
   type AnalysisProgress,
   type CreateDocumentInput,
@@ -11,6 +12,7 @@ import {
   type DocumentDetail,
   type DocumentSummary,
   type HealthResponse,
+  type LlmBalance,
   type SegmentView,
   type TargetLevel,
   type TokenAnalysisOverride
@@ -48,6 +50,18 @@ async function request<T>(
 
 export function getHealth(): Promise<HealthResponse> {
   return request("/api/health", { method: "GET" }, (payload) => healthResponseSchema.parse(payload));
+}
+
+/**
+ * 查询当前 LLM 账号余额（服务端代理，只回传脱敏 key）。
+ * 未配置 provider（503）或查询失败（502）时抛错，调用方应静默降级为「余额未知」。
+ */
+export function getLlmBalance(): Promise<LlmBalance> {
+  return request(
+    "/api/llm/balance",
+    { method: "GET" },
+    (payload) => llmBalanceSchema.parse(payload)
+  );
 }
 
 export interface DocumentListOptions {

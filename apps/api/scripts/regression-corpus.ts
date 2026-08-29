@@ -219,7 +219,7 @@ function inspectSample(
     if (!analysis) {
       continue;
     }
-    politeness.add(analysis.politeness);
+    politeness.add(analysis.politeness ?? "（未提供）");
 
     const local = tokenizeJapanese(segment.text, segment.id);
     if (local.length !== analysis.tokens.length) {

@@ -1,10 +1,10 @@
 # LLM 提示词与请求协议
 
 **状态**：当前实现说明
-**提示词版本**：`analysis-v4`
+**提示词版本**：`analysis-v5`
 **首个 provider**：DeepSeek OpenAI-compatible API
 **当前模型默认值**：`deepseek-v4-flash`
-**当前推理默认值**：`thinking=enabled`、`reasoning_effort=medium`
+**当前推理默认值**：`thinking=enabled`、`reasoning_effort=minimal`（2026-08-29 深夜由 medium 降档，用户拍板）
 **当前输出上限**：`LLM_MAX_TOKENS=24000`，实际按批次估算自适应，最高 32000（见第五节）
 **当前批量默认值**：`LLM_BATCH_SIZE=3`（现为"最多几段"的上限，实际按成本装箱）、`LLM_BATCH_CONCURRENCY=2`
 
@@ -72,9 +72,10 @@ stream_options: { include_usage: true }
 5. 原样保留 `tokenId`、`startOffset`、`endOffset` 和 `surface`；
 6. `category` 只能是 `word`、`particle`、`functional`、`adverb` 或 `grammar`；
 7. **每个 token 的全部 14 个字段都必须输出、不得省略**——`confidence` 对每个 token 都是必填的 0–1 数字，不得缺失、不得是字符串或单词（v4 起，实测 reasoning 模式下模型会整段省略它认为"不重要"的字段）；
-8. 把偏移理解为相对于句段文本的 JavaScript UTF-16 偏移；
-9. 不补造上下文，无法判断时使用 `null` 或 `uncertaintyNote`；
-10. 遵守 JSON Output，并参考 prompt 中的 JSON 结构示例。
+8. **每个 analysis 的全部 9 个顶层字段都必须输出、不得省略**——`translation` / `grammarSummary` / `tone` / `politeness` 等即使觉得平淡也要给出（v5 起，实测 politeness 被整段省略导致 29 个正确字段一起作废）；
+9. 把偏移理解为相对于句段文本的 JavaScript UTF-16 偏移；
+10. 不补造上下文，无法判断时使用 `null` 或 `uncertaintyNote`；
+11. 遵守 JSON Output，并参考 prompt 中的 JSON 结构示例。
 
 `contentType` 被当作用户选择的权威类型；`targetLevel` 只影响解释措辞，不能改变 token 边界、词汇事实或语法事实。
 
@@ -90,6 +91,9 @@ provider 先检查 SDK 返回的 completion：
 - JSON 是否符合 `segmentAnalysisSchema`（v4 起 `tokenAnalysisSchema.confidence` 带 `default(null)`：
   模型整段省略 confidence 时降级为"无置信度"，不再报 `Required` 拖垮整段；显式 `null` / 数字字符串还原 /
   越界拒绝等原行为不变，均有离线断言覆盖）；
+- v5 起 `segmentAnalysisSchema` 的 7 个内容字段（translation / grammarSummary / tone / politeness /
+  impliedMeaning / replyReason / uncertaintyNote）统一带 `default(null)`：单字段缺失降级为"未提供"
+  （UI 显示「未提供」），不再让整段作废；`segmentId` 与 `tokens` 保持 Required（定位依据与分析核心不可降级）。
 
 随后 [AnalysisService](../apps/api/src/services/analysis-service.ts) 继续检查：
 
@@ -119,14 +123,41 @@ batch 内仍保持稳定 ID 和独立失败状态，后续重试只重新提交�
 **输出上限自适应**：`max_tokens = min(max(LLM_MAX_TOKENS, 估算 × 1.3), 32000)`。
 多给不会多花钱（`max_tokens` 只是上限，计费按实际生成量），截断才会白跑一次。
 
-当前默认使用 `thinking=enabled`、`reasoning_effort=medium`；配置允许通过 `.env`
+当前默认使用 `thinking=enabled`、`reasoning_effort=minimal`；配置允许通过 `.env`
 调整模型、推理等级、batch 大小、输出上限和 timeout。OpenAI SDK 自动重试已关闭，避免隐藏的重复请求和额外费用。
 流式响应主要改善首字节和进度体验；总计算量仍由模型推理 token 和 batch 内容决定。
 
-**已知代价**：开启思考后推理 token 占输出的 **72.8%**（实测 prompt 52831 + completion 385570）。
-`reasoning_effort` 是成本、速度和截断率共同的杠杆，下调前应先验证解析质量是否可接受。
+**已知代价**：开启思考后推理 token 占输出高达 **72.8%**（medium 档实测 prompt 52831 + completion 385570）。
+`reasoning_effort` 是成本、速度和截断率共同的杠杆；2026-08-29 深夜用户直接拍板降为 `minimal`，
+降档后是否影响解析质量需以两篇样本回归为准（回归安排在降档切换之后）。
 
-## 六、开发者调试日志
+## 六、余额与费用统计（2026-08-29 深夜新增）
+
+**余额查询**：由本机服务端代理 DeepSeek `GET {baseUrl}/user/balance`（`Authorization: Bearer <KEY>`），
+对外暴露 `GET /api/llm/balance`。响应只含脱敏 key（`sk-49af…be98`）、模型名、base URL 和
+`entries`（`total_balance` / `granted_balance` / `topped_up_balance`，字符串，后两者可为 null）。
+完整 key 不出服务端；未配置 provider 返回 503，查询失败（网络/鉴权/非 2xx）返回 502，前端均显示「余额未知」而非崩溃。
+
+**费用统计**：`OpenAiCompatibleLlmProvider.analyze()` 从 usage 中提取 DeepSeek 特有的
+`prompt_cache_hit_tokens`（缓存命中），随输入/输出/总 token 一并写入 `segment_analyses.usage_json`。
+费用计算在 [llm-pricing.ts](../apps/api/src/llm-pricing.ts)：
+
+```text
+deepseek-v4-flash 单价（元/百万 tokens，已核对官方定价页）：
+  输入（缓存命中）  闲 0.05 / 峰 0.10
+  输入（未命中）    闲 1.5  / 峰 3.0
+  输出             闲 4.5  / 峰 9.0
+高峰 = 北京时区（UTC+8）周一至周五 9:00–12:00、14:00–18:00，其余为闲时
+费用 = 命中/未命中/输出 token 分别 × 单价后求和
+```
+
+- 统计口径：按文章聚合 `usage_json`（同批次的 usage 完全一致，聚合时去重，避免一个 batch 的用量被其 N 个句段重复计算）；
+- 计费时刻取估算发起时刻的高峰/闲时档；跨高峰边界的批次会有微小误差，属于可接受的近似；
+- 模型不在内置价格表内（或尚无用量数据）时 `cost=null`，前端显示「价格未知」，不编数；
+- 费用随分析进度接口返回：`analysisProgressSchema` 扩展 `usage`（input/output/total/cachedInputTokens）与
+  `cost`（model/currency/tier/token 明细/inputCost/outputCost/totalCost）两个字段，前端在进度区直接展示。
+
+## 七、开发者调试日志
 
 临时启用：
 
@@ -146,7 +177,7 @@ LLM_DEBUG_LOG_FILE=./data/llm-debug.jsonl
 
 Authorization header 和 API key 永远不会写入。因为 body 和 messages 包含原文，排查完成后应关闭日志并删除 `data/llm-debug.jsonl`。
 
-## 七、后续演进边界
+## 八、后续演进边界
 
 当前 `SegmentAnalysis` 是兼容现有 MVP 的过渡载体。后续拆分为 `CanonicalAnalysis` 与 `LevelExplanation` 时：
 

@@ -3,6 +3,7 @@ import {
   ProviderNotConfiguredError,
   type AnalysisRequest,
   type LlmAnalysisResult,
+  type LlmBalance,
   type LlmProvider,
   type TtsProvider,
   type TtsRequest,
@@ -18,6 +19,10 @@ export class DisabledLlmProvider implements LlmProvider {
 
   public async analyze(_request: AnalysisRequest): Promise<LlmAnalysisResult> {
     throw new ProviderNotConfiguredError("LLM");
+  }
+
+  public async fetchBalance(): Promise<LlmBalance | null> {
+    return null;
   }
 }
 

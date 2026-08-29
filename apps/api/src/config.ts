@@ -18,7 +18,9 @@ const optionalThinkingTypeSchema = z.preprocess(
 
 const optionalReasoningEffortSchema = z.preprocess(
   (value) => typeof value === "string" && value.trim().length === 0 ? undefined : value,
-  z.enum(["minimal", "low", "medium", "high", "xhigh"]).default("medium")
+  // 默认 minimal：用户实测 medium 下 30 句段要 10–20 分钟（推理 token 占输出 72.8%），
+  // 2026-08-29 深夜用户拍板降档；降档后的质量以两篇样本回归为准。
+  z.enum(["minimal", "low", "medium", "high", "xhigh"]).default("minimal")
 );
 
 const booleanEnvironmentSchema = z.preprocess((value) => {
