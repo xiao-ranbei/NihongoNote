@@ -33,6 +33,11 @@ import {
   lookupToken
 } from "../src/dictionary/lookup.js";
 import { functionalEntries, particleEntries } from "../src/dictionary/data.js";
+import {
+  alignMorphology,
+  categoryForPos,
+  tokenizeWithMorphology
+} from "../src/morphology.js";
 import { createDatabase } from "../src/db/database.js";
 import { escapeControlCharacters } from "../src/providers/openai-compatible.js";
 import {
@@ -534,6 +539,104 @@ check("词典：句末模板未命中返回 null", () => {
 check("词典：版本号可追溯", () => {
   assert.equal(getDictionaryVersion(), "1.0.0", "词典版本应与 types.ts 一致");
   return `dictionaryVersion=${getDictionaryVersion()}`;
+});
+
+console.log("=== 形态素分析：kuromoji 事实字段与边界决策 ===");
+// 实施步骤 2：kuromoji 提供 lemma/reading/partOfSpeech/conjugation 四个事实字段。
+// 实测对比（2026-08-29）：kuromoji 对动词连用形/复合助动词系统性单飞
+// （勉強|し|て|い|ます、でしょ|う），不能单独承担 token 边界；
+// 决策为「并存」——边界保留现有合并后处理，kuromoji 只做字段。
+const morphText = "毎日日本語を勉強しています。";
+const morphTokens = await tokenizeWithMorphology(morphText);
+const morphBySurface = new Map(morphTokens.map((token) => [token.surface, token]));
+
+// 边界决策对照数据（提前计算，check 回调内只做同步断言）
+const decisionText = "毎日日本語を勉強しています";
+const decisionMorphSurfaces = (await tokenizeWithMorphology(decisionText))
+  .map((token) => token.surface);
+const decisionCurrentSurfaces = tokenizeJapanese(decisionText, "seg")
+  .map((token) => token.surface);
+
+// 对齐用例数据
+const alignBoundaries = tokenizeJapanese(decisionText, "seg");
+const alignMorph = await tokenizeWithMorphology(decisionText);
+const alignedByToken = alignMorphology(alignBoundaries, alignMorph);
+
+// 前缀约束用例：「でしょう」本地切 で|しょう，kuromoji 切 でしょ|う
+const prefixText = "明日は雨が降るでしょう。";
+const prefixBoundaries = tokenizeJapanese(prefixText, "seg");
+const prefixAligned = alignMorphology(
+  prefixBoundaries,
+  await tokenizeWithMorphology(prefixText)
+);
+
+check("形态素：汉字词产出读音/原形/词性", () => {
+  const token = morphBySurface.get("勉強");
+  assert.ok(token, "「勉強」应被形态素分析覆盖");
+  assert.equal(token!.partOfSpeech, "名詞-サ変接続");
+  assert.equal(token!.reading, "ベンキョウ");
+  assert.equal(token!.lemma, "勉強");
+  return "勉強 → 名詞-サ変接続 / ベンキョウ / lemma=勉強";
+});
+check("形态素：助词产出词性与原形", () => {
+  const token = morphBySurface.get("を");
+  assert.ok(token, "「を」应被形态素分析覆盖");
+  assert.equal(token!.partOfSpeech, "助詞-格助詞");
+  assert.equal(token!.lemma, "を");
+  return "を → 助詞-格助詞 / lemma=を";
+});
+check("形态素：动词产出活用形与原形", () => {
+  const token = morphBySurface.get("し");
+  assert.ok(token, "「し」应被形态素分析覆盖");
+  assert.equal(token!.lemma, "する");
+  assert.equal(token!.conjugation, "連用形");
+  return "し → lemma=する / 連用形";
+});
+check("形态素：记号（句点）被过滤", () => {
+  assert.ok(!morphTokens.some((token) => token.surface === "。"), "句点不应进入形态素结果");
+  return "「。」被过滤（与 isWordLike=false 对齐）";
+});
+check("形态素：偏移与原文一致", () => {
+  for (const token of morphTokens) {
+    assert.equal(
+      morphText.slice(token.startOffset, token.endOffset),
+      token.surface,
+      `token ${token.surface} 的偏移与原文不符`
+    );
+  }
+  return `${morphTokens.length} 个 token 偏移全部与原文一致`;
+});
+check("形态素：pos 大类 → TokenCategory 映射", () => {
+  assert.equal(categoryForPos("助詞"), "particle");
+  assert.equal(categoryForPos("助動詞"), "functional");
+  assert.equal(categoryForPos("副詞"), "adverb");
+  assert.equal(categoryForPos("名詞"), "word");
+  assert.equal(categoryForPos("接頭詞"), "functional");
+  return "助詞→particle / 助動詞→functional / 副詞→adverb / 名詞→word";
+});
+check("边界决策：kuromoji 单飞连用形，不能单独承担边界（并存依据）", () => {
+  assert.ok(decisionMorphSurfaces.includes("し"), "kuromoji 会把 し 单飞（实证）");
+  assert.ok(decisionMorphSurfaces.includes("い"), "kuromoji 会把 い 单飞（实证）");
+  // 对照：现有合并后处理把它们并回动词/补助动词（T-1 已修复）
+  assert.ok(!decisionCurrentSurfaces.includes("い"), "现有切分不应有 い 单飞");
+  assert.ok(!decisionCurrentSurfaces.includes("し"), "现有切分不应有 し 单飞");
+  return "kuromoji（…|勉強|し|て|い|ます）vs 现有（…|勉強し|て|います）→ 边界保留现有，kuromoji 只做字段";
+});
+check("形态素：alignMorphology 按偏移为现有 token 提供字段", () => {
+  const merged = alignBoundaries.find((token) => token.surface === "勉強し");
+  const hit = merged ? alignedByToken.get(merged.tokenId) : undefined;
+  assert.ok(hit, "「勉強し」应对齐到形态素（代表=勉強）");
+  assert.equal(hit!.reading, "ベンキョウ");
+  assert.equal(hit!.lemma, "勉強");
+  return `「勉強し」→ lemma=${hit!.lemma} / reading=${hit!.reading}`;
+});
+check("形态素：对齐前缀约束——边界不一致时不填错字段", () => {
+  // 「でしょう」本地切 で|しょう，kuromoji 切 でしょ|う：
+  // 「で」的重叠代表是 でしょ，不是「で」的前缀 → 不填充，交 LLM 兜底
+  const particle = prefixBoundaries.find((token) => token.surface === "で");
+  assert.ok(particle, "「で」应存在于本地切分中");
+  assert.ok(!prefixAligned.has(particle!.tokenId), "「で」不应拿到 でしょ 的字段（防止 lemma 错填为 です）");
+  return "边界不一致 → 不填充，LLM 兜底";
 });
 
 console.log("=== 费用估算：高峰时段与单价 ===");

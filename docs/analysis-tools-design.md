@@ -70,7 +70,11 @@
 | 代价 | 词库 1–2MB（纯本地可接受）；IPADIC 对专名/新词覆盖一般 |
 | 兜底 | 第 ③ 层 LLM 必须保留，专名/新词/未收录词走 AI |
 
-> 现有 `tokenization.ts` 的合并后处理保留还是替换，在实施第一步对比验证后决定（kuromoji 正确率高则直接替换）。
+> **实测决策（2026-08-29 实施步骤 2）**：kuromoji 对动词连用形/复合助动词系统性单飞
+> （`毎日|日本語|を|勉強|し|て|い|ます`、`でしょ|う`），且 IPADIC 仍把「かって」「お」拆开，
+> 不能单独满足 T-1 分词期望 → **并存的形态**：token 边界保留 `tokenization.ts` 的合并后处理，
+> 新增 `morphology.ts`（kuromoji）只按偏移区间提供 4 个事实字段；边界不一致的 token
+> 不填充（对齐前缀约束），交 LLM 兜底。verify 新增 9 条断言固化该决策（57/57 通过）。
 
 ### 3.3 解释缓存层（决策 2：固定用法库起步 + 用户确认回填）
 
@@ -141,7 +145,7 @@
 | 模块 | 影响 | 风险 |
 | --- | --- | --- |
 | `packages/core/domain.ts` | TokenAnalysis source 字段 + 瘦身 token 形态（部分字段 optional） | 低——向后兼容，旧数据不受影响 |
-| `apps/api/src/tokenization.ts` | kuromoji 替换/增强 Intl.Segmenter | 中——需对比验证边界一致性（verify 断言兜底） |
+| `apps/api/src/tokenization.ts` | 边界保留（实测 kuromoji 单飞连用形，不能替换）；新增 `morphology.ts` 并存做字段 | 低——并存不动现有切分，verify 断言兜底 |
 | `apps/api/services/analysis-service.ts` | 三层链路（形态素 → 缓存 → LLM）+ 合并逻辑 | 中——合并需保持 token 顺序与 ID 稳定 |
 | `apps/api/repositories/document-repository.ts` | 瘦身 token 落库路径 | 低——沿用现有写入 |
 | `apps/api/routes/*` | 新增词典预览/覆盖率端点 | 低 |
@@ -156,7 +160,7 @@
 ## 六、实施顺序（决策已定，按此执行）
 
 1. **词典数据 + 查表服务**（纯后端，可离线验证）：固定用法库初始表 + `lookupToken()` + verify 断言；
-2. **kuromoji 集成**：tokenization.ts 接入形态素分析，对比现有分段边界（verify 全量回归断言），决定替换或并存；
+2. **kuromoji 集成**：✅ 已完成（2026-08-29）——新增 `morphology.ts`（kuromoji 封装 + pos→category 映射 + alignMorphology 偏移对齐）；实测对比后决策**并存**：边界保留现有合并后处理，kuromoji 只做事实字段；verify 9 条断言固化（57/57）；
 3. **analysis-service 三层链路**：缓存命中 token 不进入 AI batch；瘦身写出；句段级语义仍走 AI；
 4. **工具页**：路由 + 选择文章（多选）+ 策略/费用预览 + 成本确认弹窗 + 唯一触发按钮 + 仅词典模式（落实 LLM-011/LLM-013）；
 5. **回填沉淀**：用户在解析卡上「确认这条解释」→ 沉淀为缓存条目（UI 入口随工具页或解析卡）；
