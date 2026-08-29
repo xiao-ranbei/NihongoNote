@@ -160,10 +160,13 @@ DeepSeek 官方入口：
 | LLM-008 | 批量和流式请求 | 多个短句在受控 batch 中合并请求；OpenAI SDK 使用流式响应并支持取消，batch 完成后仍逐句校验和保存 |
 | LLM-009 | 余额查询 | 由本机服务端代理 DeepSeek `/user/balance`，前端只展示脱敏后的 key（如 `sk-49af…be98`）与余额，完整 key 不出服务端；查询失败不阻塞应用 |
 | LLM-010 | 单次分析费用 | 基于已保存的输入/输出/缓存命中用量，按模型内置单价（区分高峰/闲时）估算累计费用，随分析进度返回并展示 |
+| LLM-011 | 人工许可才解析 | 任何 AI 解析（含回归、批量验证、实测）必须经用户明确允许后才发起，不因自动流程或开发验证触发真实 LLM 调用；未获许可时只做免费本地预处理 |
+| LLM-012 | 内置词典降本 | 固定用法优先走本地离线解释（零 token）：kuromoji.js 形态素分析填充词性/原形/读音事实字段，解释缓存（固定用法库 + 用户确认回填）直接取 gloss/explanation，词典未覆盖或句段级语义才走 AI；词典命中与 AI 结果可区分（source 字段） |
+| LLM-013 | 分析工具化入口 | 分析触发从正文流程收敛为显式工具入口（类似设置页），集中管理触发（成本确认弹窗）、词典与 AI 的混合策略、费用预览、仅词典模式 |
 
 DeepSeek JSON Output 需要在 prompt 中明确要求 JSON，并设置合理的 `max_tokens`；即使返回合法 JSON，也必须继续校验业务字段和原文 ID。
 
-当前实现已覆盖 LLM-001、LLM-003、LLM-004、LLM-005 和 LLM-008 的基础链路，以及使用官方 OpenAI SDK 的 DeepSeek OpenAI-compatible adapter；默认 `deepseek-v4-flash` 使用 `thinking=enabled`、`reasoning_effort=minimal`（2026-08-29 深夜由 medium 降档，用户拍板）、`max_tokens=12000`、受控 batch 和流式响应，JSONL 调试日志和请求取消均由服务端配置。LLM-007 的 usage（含缓存命中）已随每次分析落库；LLM-009/LLM-010 于 2026-08-29 深夜新增并实现（余额端点为 `GET /api/llm/balance`，费用随 progress 的 `usage`/`cost` 字段返回）。已用真实 key 完成一段商务发言（3 个 segment）的连通性和 schema 验证，但 LLM-002 仍需使用完整固定评估样本完成质量/费用验收。LLM-006（Anthropic-compatible adapter）属于后续阶段。API 重启恢复逻辑会将中断的 `processing` 句段重新置为可重试状态。
+当前实现已覆盖 LLM-001、LLM-003、LLM-004、LLM-005 和 LLM-008 的基础链路，以及使用官方 OpenAI SDK 的 DeepSeek OpenAI-compatible adapter；默认 `deepseek-v4-flash` 使用 `thinking=enabled`、`reasoning_effort=minimal`（2026-08-29 深夜由 medium 降档，用户拍板）、`max_tokens=12000`、受控 batch 和流式响应，JSONL 调试日志和请求取消均由服务端配置。LLM-007 的 usage（含缓存命中）已随每次分析落库；LLM-009/LLM-010 于 2026-08-29 深夜新增并实现（余额端点为 `GET /api/llm/balance`，费用随 progress 的 `usage`/`cost` 字段返回）。LLM-011（人工许可才解析）为 2026-08-29 晚用户明确要求，此后所有 AI 解析须先经用户允许。LLM-012/LLM-013（内置词典降本、分析工具化入口）为 2026-08-29 晚提出的设计方向，尚未实现，方案见 `docs/analysis-tools-design.md`。已用真实 key 完成一段商务发言（3 个 segment）的连通性和 schema 验证，但 LLM-002 仍需使用完整固定评估样本完成质量/费用验收。LLM-006（Anthropic-compatible adapter）属于后续阶段。API 重启恢复逻辑会将中断的 `processing` 句段重新置为可重试状态。
 
 ## 三、产品目标
 

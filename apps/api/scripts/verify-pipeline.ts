@@ -3,13 +3,14 @@
  *
  *   pnpm --filter @nihongonote/api verify
  *
- * 覆盖五类回归：
+ * 覆盖七类回归：
  *   1. 分段 —— 说话人正则不得吞掉原文（A-2）
  *   2. 分词 —— 助词/活用尾不得被切成单字碎片（T-1）
  *   3. 落盘 —— 防抖写入不得丢数据，也不得留下临时文件（A-1）
  *   4. 响应解析 —— 模型输出裸控制字符时仍能解析（端到端实测发现）
  *   5. 装箱 —— 长句段不与其他句段同批，且装箱不重不漏（端到端实测发现）
  *   6. 契约容错 —— token 缺 confidence 时降级为 null 而非整段失败（端到端实测发现）
+ *   7. 词典 —— 固定用法库查表命中/未命中降级/瘦身格式（实施步骤 1）
  * 任一项失败以退出码 1 结束，便于接到 CI 里。
  */
 import assert from "node:assert/strict";
@@ -25,6 +26,13 @@ import {
   splitIntoSegments
 } from "../src/segmentation.js";
 import { tokenizeJapanese } from "../src/tokenization.js";
+import {
+  getDictionaryStats,
+  getDictionaryVersion,
+  lookupSentenceEnding,
+  lookupToken
+} from "../src/dictionary/lookup.js";
+import { functionalEntries, particleEntries } from "../src/dictionary/data.js";
 import { createDatabase } from "../src/db/database.js";
 import { escapeControlCharacters } from "../src/providers/openai-compatible.js";
 import {
@@ -459,6 +467,73 @@ check("A-1 进程直接退出时补写", () => {
     `写入未被补写，子进程退出前的数据丢了（读到 ${crashRows} 行）`
   );
   return "未调用 close() 的写入在 exit 钩子里补写成功";
+});
+
+console.log("=== 词典：固定用法库查表 ===");
+// 实施步骤 1 的回归守卫：查表命中、未命中降级、瘦身格式、数据完整性。
+// 词典是纯本地零 token 服务，命中结果不得编造，未命中必须返回 null 交 LLM 兜底。
+check("词典：规模满足设计下限（助词≥40、功能词≥30、句末模板≥10）", () => {
+  const stats = getDictionaryStats();
+  assert.ok(stats.particles >= 40, `助词条目 ${stats.particles} < 40`);
+  assert.ok(stats.functional >= 30, `功能词条目 ${stats.functional} < 30`);
+  assert.ok(stats.endings >= 10, `句末模板 ${stats.endings} < 10`);
+  return `助词 ${stats.particles} / 功能词 ${stats.functional} / 句末模板 ${stats.endings}`;
+});
+check("词典：同类内无重复 surface", () => {
+  const assertUnique = (label: string, entries: Array<{ surface: string }>): void => {
+    const duplicates = entries
+      .map((entry) => entry.surface)
+      .filter((surface, index, all) => all.indexOf(surface) !== index);
+    assert.equal(duplicates.length, 0, `${label} 存在重复条目：${[...new Set(duplicates)].join("/")}`);
+  };
+  assertUnique("助词", particleEntries);
+  assertUnique("功能词", functionalEntries);
+  return `助词 ${particleEntries.length} 条 / 功能词 ${functionalEntries.length} 条，无重复`;
+});
+check("词典：助词の命中，confidence=1.0 且 source=dictionary", () => {
+  const hit = lookupToken("の");
+  assert.ok(hit, "「の」应在固定用法库中");
+  assert.equal(hit!.category, "particle");
+  assert.equal(hit!.confidence, 1, "固定用法库置信度必须为 1.0");
+  assert.equal(hit!.source, "dictionary", "命中结果必须标记 source=dictionary");
+  assert.ok(hit!.explanation.length > 0, "解释不得为空");
+  return `の → particle / conf=1.0 / ${hit!.gloss}`;
+});
+check("词典：功能词ます命中为 functional", () => {
+  const hit = lookupToken("ます");
+  assert.ok(hit, "「ます」应在固定用法库中");
+  assert.equal(hit!.category, "functional");
+  return `ます → functional / ${hit!.gloss}`;
+});
+check("词典：未命中返回 null（不编造解释）", () => {
+  assert.equal(lookupToken("コンピュータ"), null, "未收录词不得编造词典解释");
+  assert.equal(lookupToken("勉強"), null, "普通动词不得被误当成固定用法");
+  return "未收录 → null，交 LLM 兜底";
+});
+check("词典：命中结果不含定位字段（瘦身存储）", () => {
+  const hit = lookupToken("を");
+  assert.ok(hit, "「を」应在固定用法库中");
+  for (const field of ["tokenId", "startOffset", "endOffset"]) {
+    assert.ok(!(field in hit!), `命中结果不应携带定位字段 ${field}`);
+  }
+  return "命中仅含 surface/category/reading/gloss/explanation/confidence/source";
+});
+check("词典：句末模板从最长开始匹配", () => {
+  const hit = lookupSentenceEnding("私は学生ですよ");
+  assert.ok(hit, "「ですよ」应命中句末模板");
+  assert.equal(hit!.surface, "ですよ");
+  const longer = lookupSentenceEnding("明日は晴れるでしょう");
+  assert.equal(longer?.surface, "でしょう", "应命中更长模板而非「しょう」之类的子串");
+  return `「ですよ」→ ${hit!.tone}；「でしょう」→ ${longer?.tone}`;
+});
+check("词典：句末模板未命中返回 null", () => {
+  assert.equal(lookupSentenceEnding("ありがとう"), null);
+  assert.equal(lookupSentenceEnding("今日は"), null, "不以模板结尾时不得命中");
+  return "未命中 → null";
+});
+check("词典：版本号可追溯", () => {
+  assert.equal(getDictionaryVersion(), "1.0.0", "词典版本应与 types.ts 一致");
+  return `dictionaryVersion=${getDictionaryVersion()}`;
 });
 
 console.log("=== 费用估算：高峰时段与单价 ===");
