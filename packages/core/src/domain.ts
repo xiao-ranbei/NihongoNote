@@ -122,17 +122,27 @@ export const tokenAnalysisSchema = z.object({
   endOffset: z.number().int().positive(),
   surface: z.string().min(1),
   category: tokenCategorySchema.default("word"),
-  lemma: z.string().min(1).nullable(),
-  reading: z.string().min(1).nullable(),
-  partOfSpeech: z.string().min(1).nullable(),
-  conjugation: z.string().min(1).nullable(),
-  gloss: z.string().min(1).nullable(),
-  particleFunction: z.string().min(1).nullable(),
-  grammarPoint: z.string().min(1).nullable(),
-  explanation: z.string().min(1).nullable(),
+  // 事实/解释字段：LLM 全量路径必需；词典/形态素命中路径可省略
+  // （瘦身存储，设计文档 3.7——省略的键不落库，不存恒定 null 的宽表）。
+  // 旧数据（全部字段为 null 或字符串）依然通过，向后兼容。
+  lemma: z.string().min(1).nullable().optional(),
+  reading: z.string().min(1).nullable().optional(),
+  partOfSpeech: z.string().min(1).nullable().optional(),
+  conjugation: z.string().min(1).nullable().optional(),
+  gloss: z.string().min(1).nullable().optional(),
+  particleFunction: z.string().min(1).nullable().optional(),
+  grammarPoint: z.string().min(1).nullable().optional(),
+  explanation: z.string().min(1).nullable().optional(),
   // 模型偶发整段省略 confidence（实测 `tokens.0.confidence: Required`，finish_reason=stop，
   // 不是截断而是输出完整性问题）。default(null) 让缺字段降级为「无置信度」而非整段失败。
-  confidence: confidenceSchema.default(null)
+  confidence: confidenceSchema.default(null),
+  /**
+   * 分析来源（设计文档 3.7）：
+   * - "dictionary"：本地固定用法库/用户回填命中（瘦身存储）
+   * - "llm"：LLM 分析
+   * 旧数据无此字段（向后兼容）。
+   */
+  source: z.enum(["dictionary", "llm"]).optional()
 });
 export type TokenAnalysis = z.infer<typeof tokenAnalysisSchema>;
 
@@ -148,7 +158,20 @@ export const segmentAnalysisSchema = z.object({
   impliedMeaning: z.string().min(1).nullable().default(null),
   replyReason: z.string().min(1).nullable().default(null),
   uncertaintyNote: z.string().min(1).nullable().default(null),
-  tokens: z.array(tokenAnalysisSchema)
+  tokens: z.array(tokenAnalysisSchema),
+  /**
+   * result_json 自身版本号（issues I-7）：迁移/校验不必依赖外部列。
+   * 旧数据无此字段（向后兼容）。
+   */
+  schemaVersion: z.number().int().positive().optional(),
+  /**
+   * 词典覆盖率（设计文档 3.7）：matched=本地命中的 token 数 / total=全部 token 数。
+   * 预览与结果都可展示覆盖率；旧数据无此字段。
+   */
+  dictionaryCoverage: z.object({
+    matched: z.number().int().nonnegative(),
+    total: z.number().int().positive()
+  }).optional()
 });
 export type SegmentAnalysis = z.infer<typeof segmentAnalysisSchema>;
 

@@ -2,12 +2,15 @@ import {
   segmentAnalysisSchema,
   type AnalysisProgress,
   type Segment,
-  type SegmentAnalysis
+  type SegmentAnalysis,
+  type TokenAnalysis
 } from "@nihongonote/core";
 
 import { DocumentRepository } from "../repositories/document-repository.js";
 import { packingSafetyRatio, planBatches } from "../llm-budget.js";
 import { estimateCost } from "../llm-pricing.js";
+import { lookupToken } from "../dictionary/lookup.js";
+import { alignMorphology, tokenizeWithMorphology } from "../morphology.js";
 import type {
   LlmAnalysisResult,
   LlmProvider,
@@ -63,6 +66,110 @@ function validateAnalysis(
   }
 
   return parsed;
+}
+
+export interface PreparedSegmentTokens {
+  /** 词典/形态素命中的 token（本地确定，不进 LLM） */
+  localTokens: TokenAnalysis[];
+  /** 未命中的 token 边界（LLM 只处理这些） */
+  llmBoundaries: TokenBoundary[];
+}
+
+/**
+ * 三层链路第 ①② 层（本地预处理，零 token，设计文档 3.1/3.3）：
+ * 形态素对齐填充事实字段 + 固定用法库查表命中解释层。
+ *
+ * 命中规则：
+ * - 词典命中 → 构造瘦身 TokenAnalysis（source=dictionary，省略恒定 null 字段）；
+ *   事实字段（lemma/reading/partOfSpeech/conjugation）优先取形态素对齐结果；
+ * - 未命中 → 该 token 进入 LLM 候选（llmBoundaries）。
+ */
+export async function prepareSegmentTokens(
+  segment: Segment,
+  boundaries: TokenBoundary[]
+): Promise<PreparedSegmentTokens> {
+  const morphology = await tokenizeWithMorphology(segment.text);
+  const aligned = alignMorphology(boundaries, morphology);
+
+  const localTokens: TokenAnalysis[] = [];
+  const llmBoundaries: TokenBoundary[] = [];
+
+  for (const boundary of boundaries) {
+    const dictHit = lookupToken(boundary.surface);
+    if (!dictHit) {
+      llmBoundaries.push(boundary);
+      continue;
+    }
+    const morph = aligned.get(boundary.tokenId);
+    localTokens.push({
+      tokenId: boundary.tokenId,
+      startOffset: boundary.startOffset,
+      endOffset: boundary.endOffset,
+      surface: boundary.surface,
+      category: dictHit.category,
+      lemma: morph?.lemma ?? null,
+      reading: morph?.reading ?? dictHit.reading ?? null,
+      partOfSpeech: morph?.partOfSpeech ?? null,
+      conjugation: morph?.conjugation ?? null,
+      gloss: dictHit.gloss,
+      explanation: dictHit.explanation,
+      confidence: dictHit.confidence,
+      source: "dictionary"
+    });
+  }
+
+  return { localTokens, llmBoundaries };
+}
+
+/**
+ * 三层链路第 ③ 层合并：把本地命中 token 与 LLM 返回的未命中 token
+ * 合并为完整 segment 分析。
+ *
+ * - 顺序：严格按本地边界顺序（token 顺序与 ID 稳定）；
+ * - 不重不漏：合并后必须恰好覆盖全部边界；
+ * - 附加 schemaVersion（I-7）与 dictionaryCoverage（设计文档 3.7）。
+ */
+export function mergeAnalysis(
+  segment: Segment,
+  boundaries: TokenBoundary[],
+  localTokens: TokenAnalysis[],
+  llmAnalysis: SegmentAnalysis
+): SegmentAnalysis {
+  const byId = new Map<string, TokenAnalysis>();
+  for (const token of localTokens) {
+    byId.set(token.tokenId, token);
+  }
+  for (const token of llmAnalysis.tokens) {
+    byId.set(token.tokenId, token);
+  }
+
+  const merged = boundaries.map((boundary) => {
+    const token = byId.get(boundary.tokenId);
+    if (!token) {
+      throw new Error(`Merged analysis is missing token ${boundary.tokenId}`);
+    }
+    return token;
+  });
+  if (merged.length !== byId.size) {
+    throw new Error(`Merged analysis contains tokens outside the boundary list (${byId.size - merged.length} extra)`);
+  }
+
+  return segmentAnalysisSchema.parse({
+    segmentId: segment.id,
+    translation: llmAnalysis.translation,
+    grammarSummary: llmAnalysis.grammarSummary,
+    tone: llmAnalysis.tone,
+    politeness: llmAnalysis.politeness,
+    impliedMeaning: llmAnalysis.impliedMeaning,
+    replyReason: llmAnalysis.replyReason,
+    uncertaintyNote: llmAnalysis.uncertaintyNote,
+    tokens: merged,
+    schemaVersion: 1,
+    dictionaryCoverage: {
+      matched: localTokens.length,
+      total: merged.length
+    }
+  });
 }
 
 function contextFor(segment: Segment, allSegments: Segment[]): string[] {
@@ -188,16 +295,30 @@ export class AnalysisService {
     allSegments: Segment[],
     batch: Segment[]
   ): Promise<void> {
+    // ① 本地边界（全量，确定性）
     const tokenBoundaries: SegmentTokenBoundaries[] = batch.map((segment) => ({
       segmentId: segment.id,
       tokens: tokenizeJapanese(segment.text, segment.id)
+    }));
+
+    // ② 本地预处理（三层链路 ①② 层）：形态素填充事实字段 + 词典查表命中解释层。
+    //    词典命中的 token 直接本地确定，不进入 LLM（零 token）。
+    const prepared = await Promise.all(batch.map(async (segment, index) => {
+      const boundaries = tokenBoundaries[index]!.tokens;
+      const { localTokens, llmBoundaries } = await prepareSegmentTokens(segment, boundaries);
+      return { segment, boundaries, localTokens, llmBoundaries };
     }));
 
     let result: LlmAnalysisResult;
     try {
       result = await this.provider.analyze({
         segments: batch,
-        tokenBoundaries,
+        // ③ LLM 解释层：只处理未命中 token（设计文档 3.1）——
+        //    词典命中 token 不进 AI batch，从源头省 token。
+        tokenBoundaries: prepared.map((item) => ({
+          segmentId: item.segment.id,
+          tokens: item.llmBoundaries
+        })),
         surroundingContext: batch.map((segment) => ({
           segmentId: segment.id,
           context: contextFor(segment, allSegments)
@@ -256,14 +377,22 @@ export class AnalysisService {
             : `LLM returned duplicate analyses for segment ${segment.id}`;
           throw new Error(detail);
         }
-        const boundaryGroup = tokenBoundaries[index];
-        if (!boundaryGroup || boundaryGroup.segmentId !== segment.id) {
+        const preparedGroup = prepared[index];
+        if (!preparedGroup || preparedGroup.segment.id !== segment.id) {
           throw new Error(`Internal token boundary mismatch for segment ${segment.id}`);
         }
-        const analysis = validateAnalysis(segment, analyses[0]!, boundaryGroup.tokens);
+        // LLM 输出只校验未命中子集
+        const analysis = validateAnalysis(segment, analyses[0]!, preparedGroup.llmBoundaries);
+        // 合并本地命中 + LLM 未命中 → 完整 segment 分析（顺序稳定、不重不漏）
+        const merged = mergeAnalysis(
+          segment,
+          preparedGroup.boundaries,
+          preparedGroup.localTokens,
+          analysis
+        );
         this.repository.saveSegmentAnalysis(
           segment.id,
-          analysis,
+          merged,
           this.provider.name,
           this.provider.model,
           this.promptVersion,

@@ -38,6 +38,13 @@ import {
   categoryForPos,
   tokenizeWithMorphology
 } from "../src/morphology.js";
+import {
+  AnalysisService,
+  mergeAnalysis,
+  prepareSegmentTokens
+} from "../src/services/analysis-service.js";
+import { DocumentRepository } from "../src/repositories/document-repository.js";
+import type { LlmAnalysisResult, LlmProvider } from "../src/providers/types.js";
 import { createDatabase } from "../src/db/database.js";
 import { escapeControlCharacters } from "../src/providers/openai-compatible.js";
 import {
@@ -637,6 +644,194 @@ check("形态素：对齐前缀约束——边界不一致时不填错字段", (
   assert.ok(particle, "「で」应存在于本地切分中");
   assert.ok(!prefixAligned.has(particle!.tokenId), "「で」不应拿到 でしょ 的字段（防止 lemma 错填为 です）");
   return "边界不一致 → 不填充，LLM 兜底";
+});
+
+console.log("=== 三层链路：本地预处理与合并 ===");
+// 实施步骤 3：词典命中 token 不进入 LLM（零 token），未命中才走 AI；
+// 命中 token 瘦身存储（省略恒定 null 字段），段级字段与 coverage 落库。
+const threeLayerText = "これは私の本です。";
+const threeLayerBoundaries = tokenizeJapanese(threeLayerText, "seg:three");
+const threeLayerPrepared = await prepareSegmentTokens(
+  { id: "seg:three", documentId: "doc", index: 0, text: threeLayerText,
+    startOffset: 0, endOffset: threeLayerText.length, speaker: null,
+    status: "queued" as const, errorMessage: null },
+  threeLayerBoundaries
+);
+
+check("三层：词典命中 token 不进 LLM 候选", () => {
+  const hitSurfaces = threeLayerPrepared.localTokens.map((token) => token.surface);
+  const llmSurfaces = threeLayerPrepared.llmBoundaries.map((boundary) => boundary.surface);
+  assert.deepEqual(hitSurfaces, ["は", "の", "です"], "は/の/です 应词典命中");
+  assert.deepEqual(llmSurfaces, ["これ", "私", "本"], "これ/私/本 未命中应进 LLM");
+  return `命中 ${hitSurfaces.join("/")} | LLM 只处理 ${llmSurfaces.join("/")}`;
+});
+check("三层：词典命中 token 瘦身存储（source/字段省略）", () => {
+  const token = threeLayerPrepared.localTokens.find((item) => item.surface === "の");
+  assert.ok(token, "「の」应本地命中");
+  assert.equal(token!.source, "dictionary");
+  assert.equal(token!.confidence, 1);
+  assert.ok((token!.explanation?.length ?? 0) > 0, "词典解释不得为空");
+  // 瘦身：省略恒定 null 的字段，不落宽表（设计文档 3.7）
+  const serialized = JSON.stringify(token);
+  assert.ok(!serialized.includes("particleFunction"), "瘦身 token 不应包含 particleFunction");
+  assert.ok(!serialized.includes("grammarPoint"), "瘦身 token 不应包含 grammarPoint");
+  // 事实字段由形态素填充
+  assert.equal(token!.lemma, "の");
+  return `の → source=dictionary / conf=1 / lemma=の / 无 particleFunction/grammarPoint 键`;
+});
+check("三层：合并后顺序稳定、不重不漏、带 coverage 与 schemaVersion", () => {
+  const llmAnalysis = {
+    segmentId: "seg:three",
+    translation: "mock翻译",
+    grammarSummary: "mock概括",
+    tone: "mock语气",
+    politeness: "formal",
+    impliedMeaning: null,
+    replyReason: null,
+    uncertaintyNote: null,
+    tokens: threeLayerPrepared.llmBoundaries.map((boundary, index) => ({
+      tokenId: boundary.tokenId,
+      startOffset: boundary.startOffset,
+      endOffset: boundary.endOffset,
+      surface: boundary.surface,
+      category: "word" as const,
+      lemma: "mock",
+      reading: "MOCK",
+      partOfSpeech: "名詞",
+      conjugation: null,
+      gloss: "mock",
+      particleFunction: null,
+      grammarPoint: null,
+      explanation: "mock",
+      confidence: 0.9,
+      source: "llm" as const
+    }))
+  };
+  const segment = { id: "seg:three", documentId: "doc", index: 0, text: threeLayerText,
+    startOffset: 0, endOffset: threeLayerText.length, speaker: null,
+    status: "queued" as const, errorMessage: null };
+  const merged = mergeAnalysis(segment, threeLayerBoundaries, threeLayerPrepared.localTokens, llmAnalysis);
+  assert.equal(merged.tokens.length, 6, "合并后应覆盖全部 6 个 token");
+  assert.deepEqual(
+    merged.tokens.map((token) => token.surface),
+    ["これ", "は", "私", "の", "本", "です"],
+    "合并顺序必须与本地边界一致"
+  );
+  assert.equal(merged.schemaVersion, 1, "result_json 应内嵌 schemaVersion");
+  assert.deepEqual(merged.dictionaryCoverage, { matched: 3, total: 6 });
+  return "6/6 token 顺序稳定 / schemaVersion=1 / coverage 3/6";
+});
+
+console.log("=== 三层链路：mock provider 端到端（LLM 只收到未命中 token）===");
+const receivedBoundaries: Array<Array<{ segmentId: string; tokens: string[] }>> = [];
+const mockProvider: LlmProvider = {
+  name: "mock",
+  protocol: "openai",
+  model: "mock-model",
+  configured: true,
+  completionTokenBudget: 100_000,
+  async analyze(request): Promise<LlmAnalysisResult> {
+    receivedBoundaries.push(request.tokenBoundaries.map((group) => ({
+      segmentId: group.segmentId,
+      tokens: group.tokens.map((token) => token.surface)
+    })));
+    return {
+      analyses: request.segments.map((segment) => {
+        const group = request.tokenBoundaries.find((item) => item.segmentId === segment.id)!;
+        return {
+          segmentId: segment.id,
+          translation: "mock翻译",
+          grammarSummary: "mock概括",
+          tone: "mock语气",
+          politeness: "formal",
+          impliedMeaning: null,
+          replyReason: null,
+          uncertaintyNote: null,
+          tokens: group.tokens.map((boundary) => ({
+            tokenId: boundary.tokenId,
+            startOffset: boundary.startOffset,
+            endOffset: boundary.endOffset,
+            surface: boundary.surface,
+            category: "word" as const,
+            lemma: "mock",
+            reading: "MOCK",
+            partOfSpeech: "名詞",
+            conjugation: null,
+            gloss: "mock",
+            particleFunction: null,
+            grammarPoint: null,
+            explanation: "mock explanation",
+            confidence: 0.9,
+            source: "llm" as const
+          }))
+        };
+      }),
+      failures: [],
+      usage: { inputTokens: 10, outputTokens: 20, totalTokens: 30, cachedInputTokens: 0 }
+    };
+  },
+  async fetchBalance(): Promise<null> {
+    return null;
+  }
+};
+
+const threeLayerDir = path.resolve(process.cwd(), "data", "_verify");
+const threeLayerFile = path.join(threeLayerDir, "three-layer.db");
+fs.rmSync(threeLayerDir, { recursive: true, force: true });
+const threeLayerDb = await createDatabase(threeLayerFile);
+const threeLayerRepo = new DocumentRepository(threeLayerDb);
+const threeLayerDoc = threeLayerRepo.create({
+  title: "三层链路验证",
+  sourceText: "これは私の本です。",
+  targetLevel: "auto"
+});
+const threeLayerService = new AnalysisService(threeLayerRepo, mockProvider, "v-test");
+threeLayerService.start(threeLayerDoc.id);
+
+let threeLayerProgress;
+for (let attempt = 0; attempt < 200; attempt += 1) {
+  threeLayerProgress = threeLayerService.getProgress(threeLayerDoc.id);
+  if (threeLayerProgress && threeLayerProgress.completedSegments === threeLayerProgress.totalSegments) {
+    break;
+  }
+  await new Promise((resolve) => setTimeout(resolve, 20));
+}
+await threeLayerService.close();
+
+const storedRows = threeLayerDb.all<{ result_json: string }>(
+  "SELECT result_json FROM segment_analyses"
+);
+const storedAnalysis = storedRows.length > 0
+  ? JSON.parse(storedRows[0]!.result_json) as {
+      tokens: Array<{ surface: string; source?: string; particleFunction?: unknown; grammarPoint?: unknown; explanation?: string }>;
+      schemaVersion?: number;
+      dictionaryCoverage?: { matched: number; total: number };
+    }
+  : null;
+threeLayerDb.close();
+fs.rmSync(threeLayerDir, { recursive: true, force: true });
+
+check("三层：LLM 请求只携带未命中 token", () => {
+  assert.ok(receivedBoundaries.length > 0, "mock provider 应收到至少一次分析请求");
+  const first = receivedBoundaries[0]?.[0];
+  assert.ok(first, "请求中应包含第一个 segment 的边界");
+  assert.deepEqual(first!.tokens, ["これ", "私", "本"], "LLM 只应收到未命中 token");
+  return `LLM 收到的 token：${first!.tokens.join("/")}`;
+});
+check("三层：端到端落库含 dictionary 来源与覆盖率", () => {
+  assert.ok(storedAnalysis, "应已落库 segment_analyses");
+  assert.equal(storedAnalysis!.schemaVersion, 1);
+  assert.deepEqual(storedAnalysis!.dictionaryCoverage, { matched: 3, total: 6 });
+  const dictionaryTokens = storedAnalysis!.tokens.filter((token) => token.source === "dictionary");
+  const llmTokens = storedAnalysis!.tokens.filter((token) => token.source === "llm");
+  assert.equal(dictionaryTokens.length, 3, "应有 3 个 dictionary token");
+  assert.equal(llmTokens.length, 3, "应有 3 个 llm token");
+  // 瘦身存储：dictionary token 无恒定 null 字段
+  for (const token of dictionaryTokens) {
+    assert.ok(!("particleFunction" in token), "dictionary token 不应含 particleFunction");
+    assert.ok(!("grammarPoint" in token), "dictionary token 不应含 grammarPoint");
+  }
+  return `落库 6 token：dictionary ${dictionaryTokens.length} / llm ${llmTokens.length} / coverage 3/6`;
 });
 
 console.log("=== 费用估算：高峰时段与单价 ===");

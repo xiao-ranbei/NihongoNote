@@ -302,7 +302,7 @@ function renderArticle(
   return content;
 }
 
-function TokenFact({ label, value }: { label: string; value: string | null }): ReactElement | null {
+function TokenFact({ label, value }: { label: string; value: string | null | undefined }): ReactElement | null {
   if (!value || value.trim().length === 0) {
     return null;
   }
