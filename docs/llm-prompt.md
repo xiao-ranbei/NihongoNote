@@ -1,12 +1,12 @@
 # LLM 提示词与请求协议
 
 **状态**：当前实现说明
-**提示词版本**：`analysis-v1`
+**提示词版本**：`analysis-v4`
 **首个 provider**：DeepSeek OpenAI-compatible API
 **当前模型默认值**：`deepseek-v4-flash`
 **当前推理默认值**：`thinking=enabled`、`reasoning_effort=medium`
-**当前输出上限**：`max_tokens=12000`
-**当前批量默认值**：`LLM_BATCH_SIZE=3`、`LLM_BATCH_CONCURRENCY=2`
+**当前输出上限**：`LLM_MAX_TOKENS=24000`，实际按批次估算自适应，最高 32000（见第五节）
+**当前批量默认值**：`LLM_BATCH_SIZE=3`（现为"最多几段"的上限，实际按成本装箱）、`LLM_BATCH_CONCURRENCY=2`
 
 ## 一、提示词在哪里
 
@@ -32,8 +32,9 @@ new OpenAI({
 client.chat.completions.create(requestBody, { signal })
 ```
 
-分析服务会把多个待分析 segment 合并为受控 batch；短对话默认可以在一个请求中完成，而长文按
-`LLM_BATCH_SIZE` 分批，并以 `LLM_BATCH_CONCURRENCY` 控制同时运行的 batch 数量，避免为每个句子重复支付固定 prompt 和推理开销。
+分析服务会把多个待分析 segment 合并为受控 batch；短对话默认可以在一个请求中完成，长文则**按估算成本装箱**
+（见 [llm-budget.ts](../apps/api/src/llm-budget.ts)），并以 `LLM_BATCH_CONCURRENCY` 控制同时运行的 batch 数量，
+避免为每个句子重复支付固定 prompt 和推理开销。`LLM_BATCH_SIZE` 退化为"一个批次最多几段"的上限。
 
 发送到 DeepSeek 的请求包含：
 
@@ -69,10 +70,11 @@ stream_options: { include_usage: true }
 3. 返回自然中文译文、语法结构、语气、礼貌程度、潜台词、对话接话理由和不确定性；
 4. 对每个本地提供的 token 返回一项分析；
 5. 原样保留 `tokenId`、`startOffset`、`endOffset` 和 `surface`；
-6. `category` 只能是 `word`、`particle`、`adverb` 或 `grammar`；
-7. 把偏移理解为相对于句段文本的 JavaScript UTF-16 偏移；
-8. 不补造上下文，无法判断时使用 `null` 或 `uncertaintyNote`；
-9. 遵守 JSON Output，并参考 prompt 中的 JSON 结构示例。
+6. `category` 只能是 `word`、`particle`、`functional`、`adverb` 或 `grammar`；
+7. **每个 token 的全部 14 个字段都必须输出、不得省略**——`confidence` 对每个 token 都是必填的 0–1 数字，不得缺失、不得是字符串或单词（v4 起，实测 reasoning 模式下模型会整段省略它认为"不重要"的字段）；
+8. 把偏移理解为相对于句段文本的 JavaScript UTF-16 偏移；
+9. 不补造上下文，无法判断时使用 `null` 或 `uncertaintyNote`；
+10. 遵守 JSON Output，并参考 prompt 中的 JSON 结构示例。
 
 `contentType` 被当作用户选择的权威类型；`targetLevel` 只影响解释措辞，不能改变 token 边界、词汇事实或语法事实。
 
@@ -83,8 +85,11 @@ provider 先检查 SDK 返回的 completion：
 - completion choice 是否存在；
 - `finish_reason` 是否为 `length`；
 - `message.content` 是否为空；
-- content 是否为合法 JSON；
-- JSON 是否符合 `segmentAnalysisSchema`。
+- content 是否为合法 JSON（若含模型输出的裸控制字符，会先转义字符串字面量内部的控制字符再解析一次，
+  并把这个事件记为 `llm.json.invalid`；实测一次坏响应会让整批 3 个 segment 一起失败）；
+- JSON 是否符合 `segmentAnalysisSchema`（v4 起 `tokenAnalysisSchema.confidence` 带 `default(null)`：
+  模型整段省略 confidence 时降级为"无置信度"，不再报 `Required` 拖垮整段；显式 `null` / 数字字符串还原 /
+  越界拒绝等原行为不变，均有离线断言覆盖）；
 
 随后 [AnalysisService](../apps/api/src/services/analysis-service.ts) 继续检查：
 
@@ -100,9 +105,26 @@ provider 先检查 SDK 返回的 completion：
 当前分析服务按受控 batch 调用 provider；一个 batch 包含多个 segment，并在完整流结束后分别校验和保存每个结果。
 batch 内仍保持稳定 ID 和独立失败状态，后续重试只重新提交失败 segment 所在的 batch。
 
-当前默认使用 `thinking=enabled`、`reasoning_effort=medium` 和 `max_tokens=12000`；配置允许通过 `.env`
+**装箱策略（2026-08-29 改）**：早期版本按固定段数切批，结果三个长句段凑一批会打满输出上限（样本 2 因此丢掉 3 个句段）。现改为按估算成本装箱：
+
+```text
+估算 completion ≈ 3500 × 段数 + 230 × 原文字符
+装箱预算 = 32000 × 0.77 = 24640
+```
+
+系数来自两篇样本 19 次真实请求的回归：实测 completion 是原文字符数的 200 ~ 500 倍（均值 294），
+取 19 个样本点的上界，宁可高估——高估只让批次变小，低估会让整批截断。
+单个句段即使超预算也单独成批，保证不重不漏。代价是批次数从 19 增至 27，但批次更小、总墙钟时间持平。
+
+**输出上限自适应**：`max_tokens = min(max(LLM_MAX_TOKENS, 估算 × 1.3), 32000)`。
+多给不会多花钱（`max_tokens` 只是上限，计费按实际生成量），截断才会白跑一次。
+
+当前默认使用 `thinking=enabled`、`reasoning_effort=medium`；配置允许通过 `.env`
 调整模型、推理等级、batch 大小、输出上限和 timeout。OpenAI SDK 自动重试已关闭，避免隐藏的重复请求和额外费用。
 流式响应主要改善首字节和进度体验；总计算量仍由模型推理 token 和 batch 内容决定。
+
+**已知代价**：开启思考后推理 token 占输出的 **72.8%**（实测 prompt 52831 + completion 385570）。
+`reasoning_effort` 是成本、速度和截断率共同的杠杆，下调前应先验证解析质量是否可接受。
 
 ## 六、开发者调试日志
 

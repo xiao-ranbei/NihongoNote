@@ -1,3 +1,4 @@
+import { hardMaxCompletionTokens } from "../llm-budget.js";
 import {
   ProviderNotConfiguredError,
   type AnalysisRequest,
@@ -13,6 +14,7 @@ export class DisabledLlmProvider implements LlmProvider {
   public readonly protocol = "openai" as const;
   public readonly model = "disabled";
   public readonly configured = false;
+  public readonly completionTokenBudget = hardMaxCompletionTokens;
 
   public async analyze(_request: AnalysisRequest): Promise<LlmAnalysisResult> {
     throw new ProviderNotConfiguredError("LLM");

@@ -8,8 +8,13 @@
 - [产品需求说明](requirements.md)：已确认的用户场景、功能需求、数据结构和验收标准。
 - [技术架构方案](architecture.md)：前后端、AI 分析、TTS 接口预留、存储和隐私设计。
 - [LLM 提示词与请求协议](llm-prompt.md)：当前 `systemPrompt` 的源码位置、OpenAI SDK 请求字段、响应校验和调试日志。
-- [迭代路线图](roadmap.md)：分阶段交付范围、周期、风险和后续扩展。
+- [迭代路线图](roadmap.md)：分阶段交付范围、周期、进度快照、审阅记录和后续扩展。
+- [2026-08-29 完整语料回归报告](regression-2026-08-29.md)：两篇样本 55 个句段的真实 LLM 端到端原始数据。
 - [日语解析评估样本集](evaluation-corpus.md)：当前两篇真实商务对话、解析重点和回归检查项。
+- [优化评审清单](optimization-review.md)：2026-08-28 深度评审——P0 缺陷、分词粒度、提示词矛盾、UI 偏差与修复顺序。
+- [主题系统与设计 Token](theme-system.md)：六套主题、Token 分组、结构层维护规范与 `data-layout` 扩展方案。
+- [UI 设计提案](ui-design-proposals.html)：六案设计画廊（已全部保留为可切换主题）。
+- [项目理解报告](../overview.md)：2026-08-28 全量代码审阅的架构、数据模型与完成度评估。
 - [项目根目录 README](../README.md)：本地开发环境、目录结构和启动命令。
 
 ## 当前结论
@@ -28,6 +33,16 @@
 
 TTS provider 仅预留接口和后续标准朗读/播放方向，当前版本不生成音频，也不包含录音或跟读。
 
-本目录既有产品决策来自 2026-08-26 的需求确认；连续阅读、分层标注、多材料区块和学习库交互于 2026-08-27 进一步澄清；P1 范围、取消语义、人工修正优先级和等级解释层于 2026-08-28 确认。供应商价格和模型能力会变化，实施前应重新核对官方文档和定价。
+本目录既有产品决策来自 2026-08-26 的需求确认；连续阅读、分层标注、多材料区块和学习库交互于 2026-08-27 进一步澄清；P1 范围、取消语义、人工修正优先级和等级解释层于 2026-08-28 确认；2026-08-29 完成 UI 六提案评审（全部保留为主题）、样式 Token 化与主题系统落地，并产出深度优化评审。供应商价格和模型能力会变化，实施前应重新核对官方文档和定价。
 
-当前代码状态：P1 MVP 已具备句子/token 两层阅读交互、可中止云端分析、内容类型手动选择与建议、首版标题/角色/解析字段修正，以及学习库搜索和分析状态筛选。DeepSeek provider 使用官方 OpenAI SDK，默认模型为 `deepseek-v4-flash`，推理参数和 JSONL 调试日志可配置；已完成一段真实商务发言的 3 个句子验证，完整样本的质量/费用验收和完整范围标注仍待后续完成。
+当前代码状态：P1 MVP 已具备句子/token 两层阅读交互、可中止云端分析、内容类型手动选择与建议、首版标题/角色/解析字段修正，以及学习库搜索和分析状态筛选。DeepSeek provider 使用官方 OpenAI SDK，默认模型为 `deepseek-v4-flash`，推理参数和 JSONL 调试日志可配置。样式层已完成 Token 化并落地六套可切换主题（`data-theme`），线型语言（实线/双线/虚线/波浪）与五类标注类别已按需求贯通，切换 UI 与主题微调待接入。完整范围标注仍属后续扩展。
+
+本机环境已跑通：`pnpm install`、`pnpm typecheck`（core / api / web 全绿）、`pnpm dev`（API `:8787`、Web `:5173`）均已验证。P0 缺陷（说话人正则、数据库落盘策略）与分词/提示词问题已修复并回归，详见[优化评审](optimization-review.md)与[路线图第九节](roadmap.md#九进度审阅记录)。
+
+自检与回归命令：
+
+| 命令 | 作用 |
+| --- | --- |
+| `pnpm typecheck` | 三个包的类型检查（含 `apps/api/scripts`） |
+| `pnpm --filter @nihongonote/api verify` | 20 条断言的分段/分词/落盘自检，不需要网络与 LLM |
+| `cd apps/api && NIHONGO_DATA_DIR=./data/regression LLM_DEBUG_LOGGING=true ./node_modules/.bin/tsx scripts/regression-corpus.ts` | 用 `evaluation-corpus.md` 两篇完整样本跑真实 LLM 端到端回归，独立数据目录，输出 Markdown 报告 |

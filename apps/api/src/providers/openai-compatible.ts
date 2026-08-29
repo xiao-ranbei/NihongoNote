@@ -9,8 +9,12 @@ import OpenAI, {
 } from "openai";
 import { z } from "zod";
 
-import { segmentAnalysisSchema } from "@nihongonote/core";
+import { segmentAnalysisSchema, type Segment } from "@nihongonote/core";
 
+import {
+  estimateCompletionTokens,
+  hardMaxCompletionTokens
+} from "../llm-budget.js";
 import {
   ProviderConfigurationError,
   ProviderRequestError,
@@ -62,21 +66,48 @@ Each analysis must contain:
 - impliedMeaning: implicit meaning or null when there is none or it cannot be determined
 - replyReason: why this reply follows the surrounding dialogue, or null when there is no dialogue context
 - uncertaintyNote: a clear uncertainty note or null
-- tokens: an array of meaningful surface tokens
+- tokens: one entry for every boundary listed under that segment's tokenBoundaries
 
-Each token must contain tokenId, startOffset, endOffset, surface, category, lemma, reading, partOfSpeech,
-conjugation, gloss, particleFunction, grammarPoint, explanation, and confidence. Set category to exactly
-one of "word", "particle", "adverb", or "grammar": use "particle" for 助词, "adverb" for 副词,
-"grammar" for a token that carries a grammar construction or function, and "word" for other vocabulary.
-The user payload provides the deterministic token boundaries. Return exactly one token analysis for
-each provided boundary, preserving tokenId, startOffset, endOffset, and surface exactly.
+Each token must contain all of the following fields and none may be omitted: tokenId, startOffset,
+endOffset, surface, category, lemma, reading, partOfSpeech, conjugation, gloss, particleFunction,
+grammarPoint, explanation, and confidence. Omitting any field, including confidence, invalidates
+that token's analysis.
+confidence is required for every token: a JSON number between 0 and 1 — never a quoted string, never
+a word like "high", and never absent.
+Set category to exactly one of "word", "particle", "functional", "adverb", or "grammar":
+- "particle" for 助词 such as は/が/を/に/で/と/の/へ/も/から/まで
+- "functional" for 助动词 and other function words that are not particles, such as ます/です/た/ない/たい/ください
+- "adverb" for 副词 such as とても/まだ/すぐ
+- "grammar" for a token that carries a grammar construction, such as 〜てしまう or 〜ばかり
+- "word" for everything else, including nouns, verbs, adjectives and proper names
+
+The user payload provides deterministic token boundaries computed locally. Those boundaries are fixed:
+return exactly one token analysis for every provided boundary, in the same order, preserving tokenId,
+startOffset, endOffset and surface exactly. Do not skip a boundary because it looks trivial, do not
+merge two boundaries, and do not invent boundaries that were not supplied.
+Every token deserves a short explanation even when it is a single particle — a learner is reading this
+precisely to understand those. It is fine to say a token is unremarkable; it is not fine to omit it.
 Token offsets are JavaScript UTF-16 offsets relative to that segment's text. Use null for a field that
 is not applicable or cannot be determined.
 Do not invent context. If multiple interpretations are reasonable, say so in uncertaintyNote.
 contentType is the user's selected document type. Treat it as authoritative; do not replace it with an inferred type.
 targetLevel controls explanation wording only. It must never change token boundaries, lexical facts, or grammar facts.
 Example JSON shape: {"analyses":[{"segmentId":"...","translation":"...","grammarSummary":"...","tone":"...","politeness":"...","impliedMeaning":null,"replyReason":null,"uncertaintyNote":null,"tokens":[]}]}
-The word JSON must be followed: do not wrap it in Markdown fences.`;
+Return raw JSON only: no Markdown fences, no prose before or after the JSON.`;
+
+/**
+ * 给估算结果留的放大系数。
+ *
+ * 开启思考后真正的内容只占输出的小头，凭直觉估预算会严重低估：
+ * 实测（deepseek-v4-flash，thinking=enabled，reasoning_effort=medium）
+ * 19 批请求里 completion token 是原文字符数的 200 ~ 500 倍，推理过程占输出 72.8%。
+ * 估算式与系数见 `llm-budget.ts`；这里再放大 1.3 倍作为上限。
+ * 多给不会多花钱（max_tokens 只是上限，计费按实际生成量），截断才会白跑一次。
+ */
+const completionTokenSafetyFactor = 1.3;
+
+/** config.ts 的 schema 校验上限，代码内不得越过。 */
+const hardMaxTokens = hardMaxCompletionTokens;
 
 function endpointFor(baseUrl: string): string {
   return new URL("chat/completions", `${baseUrl.replace(/\/+$/u, "")}/`).toString();
@@ -106,12 +137,70 @@ function writeDebugLog(
   );
 }
 
+const controlCharacterEscapes: Record<string, string> = {
+  "\n": "\\n",
+  "\r": "\\r",
+  "\t": "\\t",
+  "\b": "\\b",
+  "\f": "\\f"
+};
+
+/*
+ * 模型偶尔会在 JSON 字符串里直接吐出裸换行/制表符，导致整批响应无法解析
+ * （实测 `Bad control character in string literal`）。
+ * 只转义字符串字面量内部的控制字符，不改动结构字符，也不丢弃内容。
+ */
+export function escapeControlCharacters(text: string): string {
+  let result = "";
+  let inString = false;
+  let escaped = false;
+
+  for (const char of text) {
+    if (inString) {
+      if (escaped) {
+        result += char;
+        escaped = false;
+        continue;
+      }
+      if (char === "\\") {
+        result += char;
+        escaped = true;
+        continue;
+      }
+      if (char === '"') {
+        inString = false;
+        result += char;
+        continue;
+      }
+      const code = char.codePointAt(0) ?? 0;
+      if (code < 0x20) {
+        result += controlCharacterEscapes[char] ?? `\\u${code.toString(16).padStart(4, "0")}`;
+        continue;
+      }
+      result += char;
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+    }
+    result += char;
+  }
+
+  return result;
+}
+
 function parseJsonResponse(responseBody: string): unknown {
   try {
     return JSON.parse(responseBody) as unknown;
   } catch (error) {
-    const detail = error instanceof Error ? error.message : "unknown JSON parse error";
-    throw new ProviderRequestError(`LLM returned invalid JSON: ${detail}`);
+    // 先尝试修掉裸控制字符再解析，仍然失败才报错
+    try {
+      return JSON.parse(escapeControlCharacters(responseBody)) as unknown;
+    } catch {
+      const detail = error instanceof Error ? error.message : "unknown JSON parse error";
+      throw new ProviderRequestError(`LLM returned invalid JSON: ${detail}`);
+    }
   }
 }
 
@@ -230,6 +319,7 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
   public readonly protocol: LlmProtocol = "openai";
   public readonly configured: boolean;
   public readonly model: string;
+  public readonly completionTokenBudget = hardMaxCompletionTokens;
 
   private readonly client: OpenAI | undefined;
   private readonly apiKey: string | undefined;
@@ -266,6 +356,24 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
     return this.config.providerName;
   }
 
+  /**
+   * 按本批 segment 的实际长度放大输出上限。
+   *
+   * 固定上限、批量大小和句子长度三者是耦合的：早期版本按「段数 × 常数」估预算，
+   * 结果三个长句段凑一批照样打满 30000 上限（样本 2 因此丢掉 3 个句段）。
+   * 改为按原文长度估算后，取「配置值」与「估算值 × 1.3」的较大者，
+   * 既不突破 32000 硬上限，也不会因为 batch_size 调大而突然失败。
+   */
+  private resolveMaxTokens(segments: readonly Pick<Segment, "text">[]): number {
+    return Math.min(
+      Math.max(
+        this.maxTokens,
+        Math.ceil(estimateCompletionTokens(segments) * completionTokenSafetyFactor)
+      ),
+      hardMaxTokens
+    );
+  }
+
   public async analyze(request: AnalysisRequest): Promise<LlmAnalysisResult> {
     if (!this.apiKey || !this.client) {
       throw new ProviderConfigurationError(
@@ -278,11 +386,12 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
     const timeoutSignal = AbortSignal.timeout(this.timeoutMs);
     const signal = AbortSignal.any([request.signal, timeoutSignal]);
     const requestId = randomUUID();
+    const maxTokens = this.resolveMaxTokens(request.segments);
     const requestBody = requestPayload(
       request,
       this.model,
       this.temperature,
-      this.maxTokens,
+      maxTokens,
       this.thinkingType,
       this.reasoningEffort
     );
@@ -382,14 +491,33 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
     }
     if (finishReason === "length") {
       throw new ProviderRequestError(
-        "LLM response was truncated at the token limit; increase LLM_MAX_TOKENS and retry"
+        `LLM response was truncated at the ${maxTokens} token limit while analyzing `
+        + `${request.segments.length} segment(s); retry the failed segments, `
+        + "or lower LLM_BATCH_SIZE / raise LLM_MAX_TOKENS"
       );
     }
     if (content.trim().length === 0) {
       throw new ProviderRequestError("LLM returned empty analysis content");
     }
 
-    const analysisPayload = parseJsonResponse(content);
+    let analysisPayload: unknown;
+    try {
+      analysisPayload = parseJsonResponse(content);
+    } catch (error) {
+      // 解析失败时若不留下原文，下次排查只能重跑一遍请求（实测一次要几分钟）
+      writeDebugLog(
+        this.debugLogging,
+        this.debugLogFile,
+        "llm.json.invalid",
+        requestId,
+        {
+          message: error instanceof Error ? error.message : "unknown JSON parse error",
+          contentLength: content.length,
+          excerpt: content.slice(0, 8_000)
+        }
+      );
+      throw error;
+    }
     const analysisEnvelope = analysisEnvelopeSchema.safeParse(analysisPayload);
     if (!analysisEnvelope.success) {
       const issue = analysisEnvelope.error.issues[0];
@@ -414,10 +542,22 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
       }
       const parsed = segmentAnalysisSchema.safeParse(item);
       if (!parsed.success) {
-        failures.push({
-          segmentId,
-          message: schemaIssueMessage(parsed.error)
-        });
+        const message = schemaIssueMessage(parsed.error);
+        // 只看到 schema 错误无法判断是提示词没说清还是模型在乱输出，
+        // 记下原始片段，下次排查不用重新跑一遍请求。
+        writeDebugLog(
+          this.debugLogging,
+          this.debugLogFile,
+          "llm.schema.mismatch",
+          requestId,
+          {
+            segmentId,
+            message,
+            issues: parsed.error.issues.slice(0, 5),
+            rawItem: JSON.stringify(item).slice(0, 2_000)
+          }
+        );
+        failures.push({ segmentId, message });
         continue;
       }
       analyses.push(parsed.data);

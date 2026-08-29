@@ -18,13 +18,29 @@ export interface AppDatabase {
   close(): void;
 }
 
+/**
+ * sql.js 没有增量落盘：任何一次写入都要把整个库 export() 成字节再写文件。
+ * 分析一篇长文会触发上百次 segment 状态更新，同步落盘意味着上百次全量序列化，
+ * 长文本下能把分析耗时拖到不可接受。
+ *
+ * 这里改成「标脏 + 空闲 2 秒后写一次 + 退出前补写」，并用临时文件原子替换，
+ * 避免写一半崩溃留下损坏的 .db。最坏情况是崩溃时丢掉最后 2 秒的写入，
+ * 而分析进度本来就有 recoverInterruptedAnalyses() 兜底回退到 queued。
+ */
+const persistIdleDelayMs = 2_000;
+
 class SqlJsDatabaseAdapter implements AppDatabase {
   private transactionDepth = 0;
+  private pendingPersist: NodeJS.Timeout | undefined;
+  private dirty = false;
+  private closed = false;
 
   public constructor(
     private readonly database: SqlJsDatabase,
     private readonly databaseFile: string
-  ) {}
+  ) {
+    this.registerShutdownHooks();
+  }
 
   public all<T extends object>(sql: string, params?: QueryParams): T[] {
     const statement = this.database.prepare(sql);
@@ -79,18 +95,69 @@ class SqlJsDatabaseAdapter implements AppDatabase {
   }
 
   public close(): void {
-    this.persist();
+    if (this.closed) {
+      return;
+    }
+    this.flush();
+    this.closed = true;
     this.database.close();
   }
 
   private persistIfReady(): void {
     if (this.transactionDepth === 0) {
-      this.persist();
+      this.schedulePersist();
     }
   }
 
+  private schedulePersist(): void {
+    if (this.closed) {
+      return;
+    }
+
+    this.dirty = true;
+    if (this.pendingPersist) {
+      return;
+    }
+
+    this.pendingPersist = setTimeout(() => {
+      this.pendingPersist = undefined;
+      this.flush();
+    }, persistIdleDelayMs);
+    // 空闲定时器不该拖住进程退出，退出路径另有 flush 兜底。
+    this.pendingPersist.unref();
+  }
+
+  private flush(): void {
+    if (!this.dirty || this.closed) {
+      return;
+    }
+    this.dirty = false;
+    this.persist();
+  }
+
   private persist(): void {
-    fs.writeFileSync(this.databaseFile, Buffer.from(this.database.export()));
+    const bytes = Buffer.from(this.database.export());
+    const temporaryFile = `${this.databaseFile}.tmp`;
+
+    fs.mkdirSync(path.dirname(this.databaseFile), { recursive: true });
+    fs.writeFileSync(temporaryFile, bytes);
+    // 同分区 rename 是原子的：要么拿到完整的旧库，要么拿到完整的新库。
+    fs.renameSync(temporaryFile, this.databaseFile);
+  }
+
+  private registerShutdownHooks(): void {
+    // exit 回调只能做同步工作，persist 全同步，安全。
+    process.on("exit", () => this.flush());
+    process.on("beforeExit", () => this.flush());
+
+    // 信号只补写不关闭：Fastify 自己有关闭流程，这里抢着 close 会打断它。
+    // 重新投递同一个信号，让进程按默认语义退出。
+    const onSignal = (signal: NodeJS.Signals): void => {
+      this.flush();
+      process.kill(process.pid, signal);
+    };
+    process.once("SIGINT", () => onSignal("SIGINT"));
+    process.once("SIGTERM", () => onSignal("SIGTERM"));
   }
 }
 

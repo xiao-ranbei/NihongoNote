@@ -12,3 +12,5 @@ coverage/
 *.webm
 *.wav
 *.mp3
+
+.workbuddy/

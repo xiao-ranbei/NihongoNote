@@ -1,0 +1,605 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NihongoNote UI 设计提案 · 6 案</title>
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: #e9e8e4;
+    color: #222;
+    font-family: "Noto Sans SC", system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding-bottom: 80px;
+  }
+  .gallery-head {
+    max-width: 1180px; margin: 0 auto; padding: 34px 24px 8px;
+  }
+  .gallery-head h1 { font-size: 1.5rem; font-weight: 500; letter-spacing: .02em; }
+  .gallery-head p { color: #666; font-size: .88rem; margin-top: 8px; line-height: 1.7; }
+  .gtabs {
+    max-width: 1180px; margin: 18px auto 0; padding: 0 24px;
+    display: flex; flex-wrap: wrap; gap: 8px; position: sticky; top: 0; z-index: 50;
+    background: linear-gradient(#e9e8e4 82%, transparent);
+    padding-bottom: 14px;
+  }
+  .gtab {
+    border: 1px solid #c9c7c0; background: #fff; border-radius: 999px;
+    padding: 8px 16px; font: inherit; font-size: .84rem; cursor: pointer; color: #444;
+  }
+  .gtab:hover { border-color: #8f6e49; }
+  .gtab.on { background: #3a342c; color: #fff; border-color: #3a342c; }
+  .gtab b { font-weight: 500; margin-right: 6px; }
+
+  .scheme { max-width: 1180px; margin: 26px auto 0; padding: 0 24px; display: none; }
+  .scheme.on { display: block; }
+  .scheme-meta { display: flex; align-items: baseline; gap: 14px; margin-bottom: 12px; flex-wrap: wrap; }
+  .scheme-meta h2 { font-size: 1.15rem; font-weight: 500; }
+  .scheme-meta .pos { color: #8f6e49; font-size: .82rem; }
+  .frame {
+    height: 680px; overflow: auto; border-radius: 14px;
+    border: 1px solid #c9c7c0; box-shadow: 0 14px 34px rgba(60,50,35,.10);
+    background: #fff;
+  }
+  .notes {
+    margin-top: 14px; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 8px 22px; color: #555; font-size: .84rem; line-height: 1.65;
+  }
+  .notes li { margin-left: 18px; margin-top: 4px; }
+  .notes .fit { color: #8f6e49; }
+
+  /* ============ 共享内容注入容器 ============ */
+  [data-article]:empty::after { content: "…"; }
+
+  /* ================= A 紙・白 ================= */
+  .sa {
+    --paper:#faf6ee; --panel:#fffdf8; --ink:#3a342c; --muted:#8a7f70;
+    --line:#e5dac7; --accent:#8f6e49;
+    --sent:rgba(226,237,247,.78);
+    --w-fill:#f1e9dc; --w-line:#bd955d;
+    --p-fill:#e2efe9; --p-line:#559587;
+    --f-fill:#f5e3e8; --f-line:#b46c84;
+    --a-fill:#ebe6f4; --a-line:#8e79bd;
+    --g-fill:#f8e9d3; --g-line:#cb8d4e;
+    background: var(--paper); color: var(--ink);
+    font-family: "Noto Sans SC", system-ui, sans-serif;
+  }
+  .sa .bar {
+    display:flex; justify-content:space-between; align-items:center;
+    padding: 14px 22px; border-bottom: 1px solid var(--line); background: var(--panel);
+  }
+  .sa .brand { font-family: "Yu Mincho","Hiragino Mincho ProN",serif; font-size: 1.05rem; letter-spacing:.06em; }
+  .sa .brand small { display:block; font-family: "Noto Sans SC",sans-serif; font-size:.62rem; color:var(--muted); letter-spacing:.22em; margin-top:2px; }
+  .sa .bar-acts { display:flex; gap:10px; align-items:center; font-size:.78rem; color:var(--muted); }
+  .sa .pill { border:1px solid var(--line); border-radius:999px; padding:5px 12px; background:var(--panel); }
+  .sa .dot { display:inline-block; width:7px; height:7px; border-radius:50%; background:#5a8a6a; margin-right:6px; vertical-align:1px; }
+  .sa .body { display:grid; grid-template-columns: 236px 1fr; min-height: 560px; }
+  .sa .lib { border-right:1px solid var(--line); background:var(--panel); padding:16px 0; }
+  .sa .lib h3 { font-size:.68rem; letter-spacing:.2em; color:var(--muted); padding:0 18px; margin-bottom:10px; font-weight:500; }
+  .sa .lib input { margin:0 14px 12px; width:calc(100% - 28px); border:1px solid var(--line); border-radius:8px; padding:7px 10px; font:inherit; font-size:.8rem; background:var(--paper); color:var(--ink); }
+  .sa .doc { display:block; width:100%; text-align:left; border:0; background:none; padding:9px 18px; font:inherit; cursor:pointer; border-left:3px solid transparent; }
+  .sa .doc:hover { background:var(--paper); }
+  .sa .doc.on { border-left-color:var(--accent); background:var(--paper); }
+  .sa .doc b { display:block; font-weight:500; font-size:.84rem; }
+  .sa .doc span { font-size:.7rem; color:var(--muted); }
+  .sa .main { padding: 20px 26px 26px; }
+  .sa .crumb { font-size:.72rem; color:var(--muted); letter-spacing:.14em; margin-bottom:6px; }
+  .sa .main h2 { font-family:"Yu Mincho","Hiragino Mincho ProN",serif; font-size:1.3rem; font-weight:500; }
+  .sa .meta-row { display:flex; gap:8px; margin:10px 0 16px; flex-wrap:wrap; }
+  .sa .tag { font-size:.7rem; border:1px solid var(--line); border-radius:999px; padding:3px 10px; color:var(--muted); background:var(--panel); }
+  .sa .acts { margin-left:auto; display:flex; gap:8px; }
+  .sa .btn { border:1px solid var(--line); background:var(--panel); border-radius:8px; padding:6px 14px; font:inherit; font-size:.78rem; cursor:pointer; color:var(--ink); }
+  .sa .btn.go { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .sa .canvas {
+    background:var(--panel); border:1px solid var(--line); border-radius:12px;
+    padding: 26px 30px 18px; font-family:"Yu Mincho","Hiragino Mincho ProN",serif;
+    font-size:1.06rem; line-height:2.35;
+  }
+  .sa .legend { display:flex; gap:14px; font-size:.7rem; color:var(--muted); margin-bottom:12px; font-family:"Noto Sans SC",sans-serif; flex-wrap:wrap; }
+  .sa .legend i { display:inline-block; width:14px; height:9px; border-radius:2px; margin-right:4px; vertical-align:-1px; }
+  .sa .turn { margin-bottom: 14px; }
+  .sa .spk { font-family:"Noto Sans SC",sans-serif; font-size:.72em; color:#765638; font-weight:500; margin-right:6px; border-bottom:2px solid #d9c5aa; }
+  .sa .seg { background:var(--sent); border-radius:6px; padding:.1em .3em; box-decoration-break:clone; -webkit-box-decoration-break:clone; }
+  .sa .tk { border-radius:3px; padding:1px 2px; cursor:pointer; }
+  .sa .tk:hover { filter:brightness(.97); box-shadow:0 0 0 2px rgba(140,110,70,.15); }
+  .sa .tk-word { background:var(--w-fill); border-bottom:2px solid var(--w-line); }
+  .sa .tk-particle { background:var(--p-fill); border-bottom:3px double var(--p-line); }
+  .sa .tk-functional { background:var(--f-fill); border-bottom:2px dashed var(--f-line); }
+  .sa .tk-adverb { background:var(--a-fill); border-bottom:2px solid var(--a-line); }
+  .sa .tk-grammar { background:var(--g-fill); border-bottom:2px solid var(--g-line); text-decoration:underline wavy var(--g-line) 1px; text-underline-offset:4px; }
+  .sa .cards { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:16px; }
+  .sa .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px 16px; }
+  .sa .card h4 { font-size:.72rem; color:var(--muted); letter-spacing:.16em; font-weight:500; margin-bottom:8px; }
+  .sa .card .big { font-family:"Yu Mincho",serif; font-size:1.15rem; }
+  .sa .card .kana { color:var(--accent); font-size:.76rem; margin-left:8px; }
+  .sa .kv { display:flex; gap:10px; font-size:.8rem; padding:4px 0; border-top:1px dashed var(--line); margin-top:6px; }
+  .sa .kv:first-of-type { border-top:0; }
+  .sa .kv b { width:64px; flex:none; color:var(--muted); font-weight:400; }
+  .sa .prog { margin-top:14px; font-size:.72rem; color:var(--muted); display:flex; align-items:center; gap:10px; }
+  .sa .track { flex:1; height:5px; background:var(--line); border-radius:99px; overflow:hidden; }
+  .sa .track i { display:block; height:100%; width:64%; background:var(--accent); }
+
+  /* ================= B 夜读 ================= */
+  .sb {
+    --paper:#16181d; --panel:#1d2026; --raise:#242830; --ink:#e8e4da; --muted:#98928a;
+    --line:#2d3138; --accent:#d9a05b;
+    --sent:rgba(122,152,192,.12);
+    --w-line:#c9a063; --p-line:#6fb5a3; --f-line:#c98ba1; --a-line:#a99ac9; --g-line:#d9a05b;
+    background: var(--paper); color: var(--ink);
+  }
+  .sb .bar { display:flex; justify-content:space-between; padding:13px 22px; border-bottom:1px solid var(--line); background:var(--panel); position:sticky; top:0; }
+  .sb .brand { font-family:"Yu Mincho",serif; font-size:1rem; }
+  .sb .brand span { color:var(--accent); }
+  .sb .menu { display:flex; gap:14px; font-size:.78rem; color:var(--muted); align-items:center; }
+  .sb .menu .burger { display:inline-flex; flex-direction:column; gap:3px; cursor:pointer; }
+  .sb .menu .burger i { width:16px; height:1.5px; background:var(--muted); }
+  .sb .stage { display:grid; grid-template-columns: minmax(0,1fr) 300px; gap:0; min-height:580px; }
+  .sb .read { padding: 34px 40px; }
+  .sb .read h2 { font-family:"Yu Mincho",serif; font-weight:500; font-size:1.25rem; margin-bottom:4px; }
+  .sb .read .sub { color:var(--muted); font-size:.74rem; margin-bottom:22px; }
+  .sb .canvas {
+    font-family:"Yu Mincho","Hiragino Mincho ProN",serif; font-size:1.08rem; line-height:2.5;
+    max-width: 640px;
+  }
+  .sb .turn { margin-bottom:18px; }
+  .sb .spk { font-size:.7em; color:var(--accent); margin-right:8px; letter-spacing:.1em; }
+  .sb .seg { background:var(--sent); border-radius:6px; padding:.08em .28em; box-decoration-break:clone; -webkit-box-decoration-break:clone; }
+  .sb .tk { border-radius:3px; padding:1px 2px; cursor:pointer; }
+  .sb .tk:hover { background:rgba(255,255,255,.07); }
+  .sb .tk-word { border-bottom:2px solid var(--w-line); }
+  .sb .tk-particle { border-bottom:3px double var(--p-line); }
+  .sb .tk-functional { border-bottom:2px dashed var(--f-line); }
+  .sb .tk-adverb { border-bottom:2px dotted var(--a-line); }
+  .sb .tk-grammar { border-bottom:2px solid var(--g-line); background:rgba(217,160,91,.10); }
+  .sb .side { border-left:1px solid var(--line); background:var(--panel); padding:20px 18px; }
+  .sb .side h4 { font-size:.68rem; letter-spacing:.2em; color:var(--muted); font-weight:500; margin-bottom:12px; }
+  .sb .card { background:var(--raise); border:1px solid var(--line); border-radius:10px; padding:14px; margin-bottom:14px; }
+  .sb .card .big { font-family:"Yu Mincho",serif; font-size:1.12rem; }
+  .sb .card .kana { color:var(--accent); font-size:.74rem; margin-left:8px; }
+  .sb .kv { display:flex; gap:10px; font-size:.78rem; padding:5px 0; }
+  .sb .kv b { width:58px; flex:none; color:var(--muted); font-weight:400; }
+  .sb .prog { margin-top:6px; font-size:.72rem; color:var(--muted); }
+  .sb .track { height:4px; background:var(--line); border-radius:99px; margin-top:8px; overflow:hidden; }
+  .sb .track i { display:block; height:100%; width:64%; background:var(--accent); }
+
+  /* ================= C 编辑部 ================= */
+  .sc {
+    --paper:#ffffff; --ink:#1c1c1c; --muted:#8a8a8a; --line:#e7e7e5; --soft:#f6f6f4;
+    --w-line:#9c9c9c; --p-line:#1c1c1c; --f-line:#b0684f; --a-line:#7a6fa0; --g-line:#4a7a68;
+    background:var(--paper); color:var(--ink);
+  }
+  .sc .bar { display:flex; justify-content:space-between; align-items:center; padding:14px 30px; border-bottom:1px solid var(--line); }
+  .sc .brand { font-size:.9rem; letter-spacing:.04em; }
+  .sc .brand em { font-style:normal; border:1.5px solid var(--ink); padding:1px 7px; border-radius:4px; margin-right:9px; font-size:.78rem; }
+  .sc .bar nav { display:flex; gap:22px; font-size:.78rem; color:var(--muted); }
+  .sc .bar nav span { cursor:pointer; }
+  .sc .bar nav span.on { color:var(--ink); border-bottom:1.5px solid var(--ink); padding-bottom:2px; }
+  .sc .wrap { max-width: 860px; margin: 0 auto; padding: 36px 30px; }
+  .sc .crumb { font-size:.7rem; letter-spacing:.22em; color:var(--muted); }
+  .sc h2 { font-size:1.5rem; font-weight:500; margin:8px 0 4px; letter-spacing:.01em; }
+  .sc .meta-row { font-size:.76rem; color:var(--muted); margin-bottom:26px; display:flex; gap:16px; }
+  .sc .meta-row .go { color:var(--ink); border-bottom:1px solid var(--ink); cursor:pointer; }
+  .sc .canvas {
+    font-family:"Yu Mincho","Hiragino Mincho ProN",serif; font-size:1.1rem; line-height:2.6; letter-spacing:.01em;
+  }
+  .sc .turn { margin-bottom:22px; }
+  .sc .spk { font-family:"Noto Sans SC",sans-serif; font-size:.68em; color:var(--muted); letter-spacing:.18em; display:block; margin-bottom:2px; }
+  .sc .tk { cursor:pointer; padding:1px 1px; border-radius:2px; }
+  .sc .tk:hover, .sc .tk.hov { background:var(--soft); }
+  .sc .tk-word { border-bottom:1.5px solid var(--w-line); }
+  .sc .tk-particle { border-bottom:3px double var(--p-line); }
+  .sc .tk-functional { border-bottom:2px dashed var(--f-line); }
+  .sc .tk-adverb { border-bottom:2px dotted var(--a-line); }
+  .sc .tk-grammar { border-bottom:2px solid var(--g-line); text-decoration:underline wavy var(--g-line) 1px; text-underline-offset:5px; }
+  .sc .pop {
+    float:right; width:250px; margin:4px 0 16px 26px; border:1px solid var(--line);
+    border-radius:10px; padding:16px; background:#fff; box-shadow:0 8px 22px rgba(0,0,0,.05);
+  }
+  .sc .pop h4 { font-size:.68rem; letter-spacing:.2em; color:var(--muted); font-weight:500; margin-bottom:10px; }
+  .sc .pop .big { font-family:"Yu Mincho",serif; font-size:1.18rem; }
+  .sc .pop .kana { color:var(--f-line); font-size:.74rem; margin-left:8px; }
+  .sc .kv { display:flex; gap:10px; font-size:.78rem; padding:5px 0; border-top:1px solid var(--line); margin-top:6px; }
+  .sc .kv:first-of-type { border-top:0; margin-top:10px; }
+  .sc .kv b { width:58px; flex:none; color:var(--muted); font-weight:400; }
+  .sc .foot { clear:both; margin-top:28px; padding-top:14px; border-top:1px solid var(--line); font-size:.72rem; color:var(--muted); display:flex; justify-content:space-between; }
+
+  /* ================= D 雜誌 ================= */
+  .sd {
+    --paper:#f7f2e7; --panel:#fdfaf3; --ink:#262220; --muted:#8d8172; --line:#ddd2bd;
+    --accent:#9e3b2c; --green:#4a6741;
+    background:var(--paper); color:var(--ink);
+  }
+  .sd .mast { display:flex; justify-content:space-between; align-items:baseline; padding:20px 34px 14px; border-bottom:3px double var(--ink); }
+  .sd .mast .name { font-family:"Yu Mincho",serif; font-size:1.5rem; letter-spacing:.14em; }
+  .sd .mast .name small { font-size:.62rem; letter-spacing:.3em; color:var(--muted); display:block; font-family:"Noto Sans SC",sans-serif; }
+  .sd .mast .iss { font-size:.72rem; color:var(--muted); letter-spacing:.2em; }
+  .sd .cols { display:grid; grid-template-columns: 1fr 292px; gap:0; min-height:560px; }
+  .sd .col-main { padding:30px 36px; border-right:1px solid var(--line); }
+  .sd .kicker { color:var(--accent); font-size:.7rem; letter-spacing:.3em; }
+  .sd .col-main h2 { font-family:"Yu Mincho",serif; font-size:1.6rem; font-weight:500; margin:8px 0 2px; }
+  .sd .byline { font-size:.72rem; color:var(--muted); margin-bottom:22px; }
+  .sd .canvas { font-family:"Yu Mincho","Hiragino Mincho ProN",serif; font-size:1.07rem; line-height:2.45; }
+  .sd .turn { margin-bottom:18px; text-indent:0; }
+  .sd .spk { font-family:"Noto Sans SC",sans-serif; font-size:.72em; color:var(--accent); font-weight:500; margin-right:6px; }
+  .sd .seg { border-left:3px solid #d9c5aa; padding-left:10px; }
+  .sd .tk { cursor:pointer; border-radius:2px; padding:1px 2px; }
+  .sd .tk:hover { background:rgba(158,59,44,.08); }
+  .sd .tk-word { background:rgba(189,149,93,.14); border-bottom:2px solid #bd955d; }
+  .sd .tk-particle { border-bottom:3px double var(--green); }
+  .sd .tk-functional { background:rgba(158,59,44,.08); border-bottom:2px dashed var(--accent); }
+  .sd .tk-adverb { border-bottom:2px dotted #8e79bd; }
+  .sd .tk-grammar { background:rgba(203,141,78,.14); border-bottom:2px solid #cb8d4e; }
+  .sd .col-side { padding:26px 22px; background:var(--panel); }
+  .sd .col-side h4 { font-size:.68rem; letter-spacing:.24em; color:var(--muted); font-weight:500; border-bottom:1px solid var(--line); padding-bottom:8px; margin-bottom:14px; }
+  .sd .note { margin-bottom:18px; }
+  .sd .note .no { font-family:"Yu Mincho",serif; color:var(--accent); font-size:1.1rem; margin-right:6px; }
+  .sd .note .big { font-family:"Yu Mincho",serif; font-size:1.05rem; }
+  .sd .note p { font-size:.78rem; line-height:1.75; color:#5c5348; margin-top:5px; }
+  .sd .note .src { font-size:.68rem; color:var(--muted); margin-top:4px; }
+  .sd .prog { margin-top:10px; font-size:.7rem; color:var(--muted); }
+
+  /* ================= E 工作台 ================= */
+  .se {
+    --paper:#f2f3f5; --panel:#ffffff; --ink:#212429; --muted:#6b7280; --line:#e2e4e8;
+    --accent:#2f6d5a;
+    background:var(--paper); color:var(--ink);
+  }
+  .se .bar { display:flex; align-items:center; gap:16px; padding:10px 18px; background:var(--panel); border-bottom:1px solid var(--line); font-size:.8rem; }
+  .se .brand { font-weight:500; }
+  .se .brand i { display:inline-block; width:10px; height:10px; border-radius:3px; background:var(--accent); margin-right:8px; vertical-align:-1px; }
+  .se .crumb { color:var(--muted); }
+  .se .bar .sp { flex:1; }
+  .se .btn { border:1px solid var(--line); background:#fff; border-radius:7px; padding:6px 13px; font:inherit; font-size:.78rem; cursor:pointer; }
+  .se .btn.go { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .se .body { display:grid; grid-template-columns: 212px minmax(0,1fr) 296px; min-height:600px; }
+  .se .lib { border-right:1px solid var(--line); background:var(--panel); padding:14px 0; }
+  .se .lib h3 { font-size:.66rem; letter-spacing:.18em; color:var(--muted); padding:0 16px 8px; font-weight:500; }
+  .se .doc { display:block; width:100%; text-align:left; border:0; background:none; font:inherit; padding:8px 16px; cursor:pointer; font-size:.8rem; }
+  .se .doc:hover { background:var(--paper); }
+  .se .doc.on { background:var(--paper); box-shadow:inset 3px 0 0 var(--accent); }
+  .se .doc .st { display:inline-block; width:7px; height:7px; border-radius:2px; margin-right:7px; vertical-align:1px; }
+  .se .st.done { background:#3f9a6e; } .se .st.run { background:#d29a3f; } .se .st.fail { background:#c95f52; } .se .st.draft { background:#c3c8cf; }
+  .se .doc span { color:var(--muted); font-size:.68rem; display:block; margin-left:14px; }
+  .se .mid { padding:18px 22px; min-width:0; }
+  .se .mid .row1 { display:flex; align-items:center; gap:12px; margin-bottom:14px; }
+  .se .mid h2 { font-size:1.1rem; font-weight:500; }
+  .se .badge { font-size:.66rem; border-radius:5px; padding:3px 8px; background:#e5f2ee; color:#2f6d5a; font-weight:500; }
+  .se .canvas {
+    background:var(--panel); border:1px solid var(--line); border-radius:10px;
+    padding:22px 24px; font-family:"Yu Mincho","Hiragino Mincho ProN",serif; font-size:1.04rem; line-height:2.4;
+  }
+  .se .turn { margin-bottom:14px; }
+  .se .spk { font-family:"Noto Sans SC",sans-serif; font-size:.7em; background:#eef1f4; color:#51606f; border-radius:4px; padding:2px 7px; margin-right:8px; }
+  .se .tk { border-radius:4px; padding:1px 3px; cursor:pointer; }
+  .se .tk:hover { box-shadow:0 0 0 2px rgba(47,109,90,.18); }
+  .se .tk-word { background:#eef1f4; border-bottom:2px solid #5b7a99; }
+  .se .tk-particle { background:#e5f2ee; border-bottom:3px double #2f8a72; }
+  .se .tk-functional { background:#f8ecef; border-bottom:2px dashed #c06a85; }
+  .se .tk-adverb { background:#ecebf6; border-bottom:2px dotted #7a6fc0; }
+  .se .tk-grammar { background:#fdf0dd; border-bottom:2px solid #d29a3f; }
+  .se .stat { display:flex; gap:10px; margin-top:14px; }
+  .se .stat div { flex:1; background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px 12px; font-size:.7rem; color:var(--muted); }
+  .se .stat b { display:block; font-size:1.15rem; color:var(--ink); font-weight:500; margin-top:2px; }
+  .se .side { border-left:1px solid var(--line); background:var(--panel); padding:16px; }
+  .se .side h4 { font-size:.66rem; letter-spacing:.18em; color:var(--muted); font-weight:500; margin-bottom:10px; }
+  .se .card { border:1px solid var(--line); border-radius:9px; padding:13px; margin-bottom:12px; }
+  .se .card .big { font-family:"Yu Mincho",serif; font-size:1.08rem; }
+  .se .card .kana { color:var(--accent); font-size:.72rem; margin-left:7px; }
+  .se .kv { display:flex; gap:9px; font-size:.76rem; padding:4px 0; }
+  .se .kv b { width:56px; flex:none; color:var(--muted); font-weight:400; }
+  .se .track { height:5px; background:var(--line); border-radius:99px; margin:8px 0 4px; overflow:hidden; }
+  .se .track i { display:block; height:100%; width:64%; background:var(--accent); }
+
+  /* ================= F 手帳 ================= */
+  .sf {
+    --paper:#fdf8ee; --panel:#ffffff; --ink:#4a4038; --muted:#a08e7a; --line:#ead9bf;
+    --accent:#e0805e;
+    background:
+      repeating-linear-gradient(45deg, rgba(224,128,94,.028) 0 14px, transparent 14px 28px),
+      var(--paper);
+    color:var(--ink);
+  }
+  .sf .bar { display:flex; justify-content:space-between; align-items:center; padding:14px 24px; }
+  .sf .brand { font-size:1.02rem; font-weight:500; }
+  .sf .brand span { color:var(--accent); }
+  .sf .brand small { display:block; font-size:.62rem; color:var(--muted); font-weight:400; letter-spacing:.2em; }
+  .sf .sticker { border:1.5px dashed #e0b48e; border-radius:999px; padding:5px 14px; font-size:.74rem; color:#b07b4f; background:#fff; transform:rotate(-1.2deg); }
+  .sf .stage { display:grid; grid-template-columns: minmax(0,1fr) 264px; gap:22px; padding:6px 24px 26px; align-items:start; }
+  .sf .sheet {
+    background:var(--panel); border-radius:16px; border:1px solid var(--line);
+    box-shadow:0 10px 24px rgba(150,110,70,.10); padding:26px 30px 22px; position:relative;
+  }
+  .sf .sheet::before { content:""; position:absolute; top:-9px; left:50%; transform:translateX(-50%) rotate(-1deg); width:86px; height:18px; background:rgba(224,128,94,.28); border-radius:2px; }
+  .sf .sheet h2 { font-size:1.18rem; font-weight:500; margin-bottom:2px; }
+  .sf .sheet .sub { font-size:.72rem; color:var(--muted); margin-bottom:18px; }
+  .sf .canvas { font-family:"Yu Mincho","Hiragino Mincho ProN",serif; font-size:1.06rem; line-height:2.6; }
+  .sf .turn { margin-bottom:18px; }
+  .sf .spk { font-family:"Noto Sans SC",sans-serif; font-size:.72em; color:#fff; background:var(--accent); border-radius:8px 8px 8px 2px; padding:2px 9px; margin-right:8px; }
+  .sf .tk { cursor:pointer; border-radius:4px; padding:1px 3px; }
+  .sf .tk:hover { box-shadow:0 2px 0 rgba(160,120,80,.35); }
+  .sf .tk-word { background:linear-gradient(to top, rgba(255,222,105,.55) 42%, transparent 42%); border-bottom:2px solid #e3b23c; }
+  .sf .tk-particle { background:linear-gradient(to top, rgba(140,214,180,.5) 42%, transparent 42%); border-bottom:3px double #4da183; }
+  .sf .tk-functional { background:linear-gradient(to top, rgba(244,167,197,.45) 42%, transparent 42%); border-bottom:2px dashed #d76a97; }
+  .sf .tk-adverb { background:linear-gradient(to top, rgba(186,164,230,.45) 42%, transparent 42%); border-bottom:2px dotted #9077c4; }
+  .sf .tk-grammar { background:linear-gradient(to top, rgba(255,196,130,.5) 42%, transparent 42%); text-decoration:underline wavy #d2843c 1.5px; text-underline-offset:5px; }
+  .sf .memo { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px; box-shadow:0 8px 18px rgba(150,110,70,.09); transform:rotate(1.1deg); }
+  .sf .memo + .memo { margin-top:16px; transform:rotate(-.8deg); }
+  .sf .memo h4 { font-size:.7rem; color:var(--accent); letter-spacing:.14em; font-weight:500; margin-bottom:8px; }
+  .sf .memo .big { font-family:"Yu Mincho",serif; font-size:1.1rem; }
+  .sf .memo .kana { color:var(--muted); font-size:.74rem; margin-left:7px; }
+  .sf .kv { display:flex; gap:9px; font-size:.76rem; padding:4px 0; }
+  .sf .kv b { width:56px; flex:none; color:var(--muted); font-weight:400; }
+  .sf .prog { margin-top:14px; font-size:.72rem; color:var(--muted); }
+  .sf .track { height:6px; background:#f0e4cf; border-radius:99px; margin-top:6px; overflow:hidden; }
+  .sf .track i { display:block; height:100%; width:64%; background:repeating-linear-gradient(45deg, #e0805e 0 6px, #eb9a7a 6px 12px); border-radius:99px; }
+</style>
+</head>
+<body>
+
+<header class="gallery-head">
+  <h1>NihongoNote UI 设计提案 · 6 案</h1>
+  <p>同一篇示例对话贯穿全部方案，便于公平对比。每个方案代表一种完整的设计语言，标注体系（词 / 助词 / 功能词 / 副词 / 语法）的语义在所有方案中保持一致：实线、双线、虚线、点线、波浪。点击顶部标签或按键盘 1-6 切换。</p>
+</header>
+
+<nav class="gtabs" id="gtabs">
+  <button class="gtab on" data-i="0"><b>A</b>紙・白</button>
+  <button class="gtab" data-i="1"><b>B</b>夜读</button>
+  <button class="gtab" data-i="2"><b>C</b>编辑部</button>
+  <button class="gtab" data-i="3"><b>D</b>雑誌</button>
+  <button class="gtab" data-i="4"><b>E</b>工作台</button>
+  <button class="gtab" data-i="5"><b>F</b>手帳</button>
+</nav>
+
+<!-- A -->
+<section class="scheme on" id="s0">
+  <div class="scheme-meta"><h2>A · 紙・白 — 和纸精修（现役基线的完成态）</h2><span class="pos">适合：长时间精读，传统文化气质</span></div>
+  <div class="frame sa">
+    <div class="bar">
+      <div class="brand">NihongoNote<small>PERSONAL JAPANESE READER</small></div>
+      <div class="bar-acts"><span class="pill"><i class="dot"></i>本机服务已连接</span><span class="pill">‹ 隐藏学习库</span></div>
+    </div>
+    <div class="body">
+      <aside class="lib">
+        <h3>学習庫 LIBRARY</h3>
+        <input placeholder="搜索标题或原文片段">
+        <button class="doc on"><b>商务需求访谈・场景 1</b><span>对话 · 已完成 · 昨天</span></button>
+        <button class="doc"><b>需求确认与范围决策</b><span>对话 · 分析中 12/30</span></button>
+        <button class="doc"><b>新闻阅读：経済記事</b><span>新闻 · 待分析</span></button>
+        <button class="doc"><b>语法笔记：授受表现</b><span>笔记 · 有失败</span></button>
+      </aside>
+      <div class="main">
+        <div class="crumb">READER / 对话</div>
+        <h2>商务需求访谈・场景 1</h2>
+        <div class="meta-row">
+          <span class="tag">对话</span><span class="tag">解释等级：自动</span><span class="tag">30 个句段</span>
+          <span class="acts"><button class="btn">编辑设置</button><button class="btn go">开始 AI 分析</button></span>
+        </div>
+        <div class="canvas">
+          <div class="legend">
+            <span><i style="background:var(--w-fill);border-bottom:2px solid var(--w-line)"></i>普通词</span>
+            <span><i style="background:var(--p-fill);border-bottom:3px double var(--p-line)"></i>助词</span>
+            <span><i style="background:var(--f-fill);border-bottom:2px dashed var(--f-line)"></i>功能词</span>
+            <span><i style="background:var(--a-fill);border-bottom:2px solid var(--a-line)"></i>副词</span>
+            <span><i style="background:var(--g-fill);border-bottom:2px solid var(--g-line)"></i>语法</span>
+          </div>
+          <div data-article></div>
+        </div>
+        <div class="cards">
+          <div class="card" data-word-card></div>
+          <div class="card" data-sentence-card></div>
+        </div>
+        <div class="prog">解析进度 · 分析中<strong style="color:var(--ink)"> 19 / 30</strong><span class="track"><i></i></span></div>
+      </div>
+    </div>
+  </div>
+  <ul class="notes">
+    <li>现役米白纸感配色的"完成态"：学习库、图例、解析卡、进度全部就位，改动成本最低。</li>
+    <li>完整线型语言：实线 / 双线 / 虚线 / 波浪，不依赖颜色也能分类。</li>
+    <li class="fit">适合：想保持现有气质、尽快收敛的用户。</li>
+  </ul>
+</section>
+
+<!-- B -->
+<section class="scheme" id="s1">
+  <div class="scheme-meta"><h2>B · 夜读 — 墨韵深色</h2><span class="pos">适合：夜间长时间学习，减少视疲劳</span></div>
+  <div class="frame sb">
+    <div class="bar">
+      <div class="brand">Nihongo<span>Note</span></div>
+      <div class="menu">
+        <span class="burger" aria-label="学习库"><i></i><i></i><i></i></span>
+        <span>学習庫</span><span>设置</span><span>›</span>
+      </div>
+    </div>
+    <div class="stage">
+      <div class="read">
+        <h2>商务需求访谈・场景 1</h2>
+        <div class="sub">对话 · 解释等级 自动 · 19/30 已分析 · 点击彩色词块查看解析</div>
+        <div class="canvas"><div data-article></div></div>
+      </div>
+      <aside class="side">
+        <h4>词语解析 WORD NOTE</h4>
+        <div class="card" data-word-card></div>
+        <h4>整句解析 SENTENCE</h4>
+        <div class="card" data-sentence-card></div>
+        <div class="prog">解析进度<strong style="color:var(--ink)"> 19 / 30</strong><div class="track"><i></i></div></div>
+      </aside>
+    </div>
+  </div>
+  <ul class="notes">
+    <li>深墨底 + 暖金强调：日文正文保持明朝体，标注只用线型与低饱和底色，暗环境下不刺眼。</li>
+    <li>解析面板固定右栏，阅读区收窄到 640px，长句阅读节奏更好。</li>
+    <li>学习库收纳为汉堡菜单，阅读沉浸感最强的一案。</li>
+    <li class="fit">适合：经常晚上学习、屏幕时间长的用户。可与 A 案共存为"深色主题"。</li>
+  </ul>
+</section>
+
+<!-- C -->
+<section class="scheme" id="s2">
+  <div class="scheme-meta"><h2>C · 编辑部 — 极简线条</h2><span class="pos">适合：喜欢 Notion / Linear 式克制，让内容说话</span></div>
+  <div class="frame sc">
+    <div class="bar">
+      <div class="brand"><em>日</em>NihongoNote</div>
+      <nav><span class="on">阅读</span><span>学習庫</span><span>设置</span></nav>
+    </div>
+    <div class="wrap">
+      <div class="crumb">对话 · 商务需求访谈</div>
+      <h2>商务需求访谈・场景 1</h2>
+      <div class="meta-row"><span>30 个句段</span><span>19 已分析</span><span class="go">开始 AI 分析 →</span></div>
+      <div class="canvas">
+        <aside class="pop">
+          <h4>WORD NOTE</h4>
+          <div data-word-card></div>
+        </aside>
+        <div data-article></div>
+        <div class="foot"><span>标注只使用线型，悬停显示浅底</span><span>19 / 30 已分析</span></div>
+      </div>
+    </div>
+  </div>
+  <ul class="notes">
+    <li>零底色哲学：词语分类只靠线型（实线 / 双线 / 虚线 / 点线 / 波浪），悬浮才出现极浅底，页面像一页安静的书。</li>
+    <li>解析卡以浮动卡形式嵌在文字流右侧，阅读动线不被打断。</li>
+    <li>黑白灰 + 少量点缀色，打印或截图都干净。</li>
+    <li class="fit">适合：视觉敏感、讨厌"彩色斑马线"的用户。标注辨识度依赖线型学习成本。</li>
+  </ul>
+</section>
+
+<!-- D -->
+<section class="scheme" id="s3">
+  <div class="scheme-meta"><h2>D · 雑誌 — 杂志排版</h2><span class="pos">适合：把学习材料当"读物"欣赏，强调叙事感</span></div>
+  <div class="frame sd">
+    <div class="mast">
+      <div class="name">NihongoNote<small>MONTHLY READING · 学習誌</small></div>
+      <div class="iss">第 001 期 · 2026 年 8 月</div>
+    </div>
+    <div class="cols">
+      <div class="col-main">
+        <div class="kicker">対話 · ビジネス</div>
+        <h2>商务需求访谈・场景 1</h2>
+        <div class="byline">解释等级 自动 · 30 个句段 · 19 已分析</div>
+        <div class="canvas"><div data-article></div></div>
+      </div>
+      <aside class="col-side">
+        <h4>注 NOTES</h4>
+        <div class="note" data-word-card></div>
+        <div class="note" data-sentence-card></div>
+        <div class="prog">解析进度 19 / 30</div>
+      </aside>
+    </div>
+  </div>
+  <ul class="notes">
+    <li>报头 + 双栏 + 脚注式注释栏：解析不是"弹窗"而是杂志的"注"，正文与解释天然分层。</li>
+    <li>深红 + 墨绿 + 赭石的印刷色，段落以竖线引导，对话像访谈实录。</li>
+    <li>右栏注释随点击切换，天然适配后续"四层点击"的层级表达。</li>
+    <li class="fit">适合：喜欢阅读仪式感、常保存导出笔记的用户。信息密度低于工作台，沉浸感强。</li>
+  </ul>
+</section>
+
+<!-- E -->
+<section class="scheme" id="s4">
+  <div class="scheme-meta"><h2>E · 工作台 — 信息密度优先</h2><span class="pos">适合：批量处理多篇文章、进度和状态一目了然</span></div>
+  <div class="frame se">
+    <div class="bar">
+      <span class="brand"><i></i>NihongoNote</span>
+      <span class="crumb">学習庫 / 商务需求访谈・场景 1</span>
+      <span class="sp"></span>
+      <button class="btn">编辑设置</button>
+      <button class="btn go">开始 AI 分析</button>
+    </div>
+    <div class="body">
+      <aside class="lib">
+        <h3>文章 DOCUMENTS</h3>
+        <button class="doc on"><span class="st run"></span>商务需求访谈・场景 1<span>对话 · 19/30 · 分析中</span></button>
+        <button class="doc"><span class="st done"></span>需求确认与范围决策<span>对话 · 30/30 · 已完成</span></button>
+        <button class="doc"><span class="st draft"></span>新闻阅读：経済記事<span>新闻 · 0/24 · 待分析</span></button>
+        <button class="doc"><span class="st fail"></span>语法笔记：授受表现<span>笔记 · 2 个失败</span></button>
+      </aside>
+      <div class="mid">
+        <div class="row1"><h2>商务需求访谈・场景 1</h2><span class="badge">分析中</span><span style="font-size:.72rem;color:var(--muted)">流式处理中</span></div>
+        <div class="canvas"><div data-article></div></div>
+        <div class="stat">
+          <div>已完成<b>19</b></div><div>处理中<b>2</b></div><div>待处理<b>7</b></div><div>失败<b>2</b></div>
+        </div>
+      </div>
+      <aside class="side">
+        <h4>解析 INSIGHT</h4>
+        <div class="card" data-word-card></div>
+        <div class="card" data-sentence-card></div>
+        <h4>进度</h4>
+        <div class="track"><i></i></div>
+        <div style="font-size:.7rem;color:var(--muted);margin-top:4px">19 / 30 · 预计剩余 4 分钟</div>
+      </aside>
+    </div>
+  </div>
+  <ul class="notes">
+    <li>三栏工作台：左列状态灯（进行 / 完成 / 失败 / 草稿），中栏阅读，右栏解析 + 统计卡。</li>
+    <li>进度按"已完成 / 处理中 / 待处理 / 失败"拆成四个数字，长文批量分析的掌控感最强。</li>
+    <li>标注色块饱和度略高，扫读时分类一眼可辨。</li>
+    <li class="fit">适合：把工具当生产线、每天处理大量材料的用户。氛围感最弱，效率感最强。</li>
+  </ul>
+</section>
+
+<!-- F -->
+<section class="scheme" id="s5">
+  <div class="scheme-meta"><h2>F · 手帳 — 文具手帐感</h2><span class="pos">适合：轻松学习心态，把笔记当手帐养</span></div>
+  <div class="frame sf">
+    <div class="bar">
+      <div class="brand">Nihongo<span>Note</span><small>日本語ノート</small></div>
+      <span class="sticker">今日も、少しずつ。</span>
+    </div>
+    <div class="stage">
+      <div class="sheet">
+        <h2>商务需求访谈・场景 1</h2>
+        <div class="sub">对话 · 解释等级 自动 · 19/30 已分析</div>
+        <div class="canvas"><div data-article></div></div>
+        <div class="prog">解析进度<div class="track"><i></i></div></div>
+      </div>
+      <aside>
+        <div class="memo" data-word-card></div>
+        <div class="memo" data-sentence-card></div>
+      </aside>
+    </div>
+  </div>
+  <ul class="notes">
+    <li>荧光笔标注（黄 / 绿 / 粉 / 紫 / 橙）+ 手绘便签卡 + 胶带细节，标注像用马克笔画上去的。</li>
+    <li>解析卡是微微倾斜的便签，右栏随点击切换内容。</li>
+    <li>进度条是斜纹"和纸胶带"，气质统一。</li>
+    <li class="fit">适合：减轻学习压迫感、喜欢温暖手作氛围的用户。娱乐性最强，专业感最弱。</li>
+  </ul>
+</section>
+
+<script>
+  const articleHTML = `
+    <p class="turn"><span class="spk">李</span><span class="seg"><span class="tk tk-word">初めまして</span>、<span class="tk tk-word">〇〇社</span><span class="tk tk-particle">の</span><span class="tk tk-word">李</span><span class="tk tk-particle">と</span><span class="tk tk-functional">申します</span>。</span></p>
+    <p class="turn"><span class="spk">田中部長</span><span class="seg"><span class="tk tk-word">本日</span><span class="tk tk-particle">は</span><span class="tk tk-word">お忙しい</span><span class="tk tk-word">中</span>、<span class="tk tk-word">お時間</span><span class="tk tk-particle">を</span><span class="tk tk-functional">いただき</span><span class="tk tk-adverb">誠に</span><span class="tk tk-grammar">ありがとうございます</span>。</span></p>`;
+  const wordCardHTML = `
+    <h4>词语解析 WORD NOTE</h4>
+    <span class="big">申し上げる</span><span class="kana">もうしあげる</span>
+    <div class="kv"><b>词性</b><span>动词 · 謙譲語（自谦语）</span></div>
+    <div class="kv"><b>释义</b><span>"说／申述"的自谦表达</span></div>
+    <div class="kv"><b>本句作用</b><span>郑重地表达"由我进行说明"</span></div>
+    <div class="kv"><b>置信度</b><span>95%</span></div>`;
+  const sentenceCardHTML = `
+    <h4>整句解析 SENTENCE</h4>
+    <div class="kv"><b>译文</b><span>初次见面，我是〇〇公司的李，今天负责软件设计说明。</span></div>
+    <div class="kv"><b>语气</b><span>郑重・礼貌（敬语＋自谦）</span></div>
+    <div class="kv"><b>礼貌级</b><span>尊敬（丁寧語＋謙譲語）</span></div>
+    <div class="kv"><b>接话理由</b><span>开场问候＋自我介绍，为后续提问建立关系</span></div>`;
+  document.querySelectorAll('[data-article]').forEach(el => { el.innerHTML = articleHTML; });
+  document.querySelectorAll('[data-word-card]').forEach(el => { el.innerHTML = wordCardHTML; });
+  document.querySelectorAll('[data-sentence-card]').forEach(el => { el.innerHTML = sentenceCardHTML; });
+
+  const tabs = [...document.querySelectorAll('.gtab')];
+  const schemes = [...document.querySelectorAll('.scheme')];
+  function show(i) {
+    tabs.forEach((t, k) => t.classList.toggle('on', k === i));
+    schemes.forEach((s, k) => s.classList.toggle('on', k === i));
+    schemes[i].scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  tabs.forEach(t => t.addEventListener('click', () => show(+t.dataset.i)));
+  document.addEventListener('keydown', e => {
+    if (e.key >= '1' && e.key <= '6') show(+e.key - 1);
+  });
+</script>
+</body>
+</html>

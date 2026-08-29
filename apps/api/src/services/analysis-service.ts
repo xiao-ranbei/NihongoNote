@@ -6,6 +6,7 @@ import {
 } from "@nihongonote/core";
 
 import { DocumentRepository } from "../repositories/document-repository.js";
+import { packingSafetyRatio, planBatches } from "../llm-budget.js";
 import type {
   LlmAnalysisResult,
   LlmProvider,
@@ -258,12 +259,16 @@ export class AnalysisService {
           break;
         }
 
-        const candidateBatches: Segment[][] = [];
-        const waveSize = this.batchSize * this.batchConcurrency;
-        for (let offset = 0; offset < Math.min(queued.length, waveSize); offset += this.batchSize) {
-          candidateBatches.push(queued.slice(offset, offset + this.batchSize));
-        }
-        const batches = candidateBatches
+        /*
+         * 按估算成本装箱，而不是按固定段数切。
+         * 固定段数在长句段上会把单次请求顶到 token 上限（实测样本 2 因此丢 3 段），
+         * 而一味调小 batch_size 又让短句段多花请求。batchSize 退化为"最多几段"。
+         */
+        const tokenBudget = Math.floor(
+          this.provider.completionTokenBudget * packingSafetyRatio
+        );
+        const batches = planBatches(queued, this.batchSize, tokenBudget)
+          .slice(0, this.batchConcurrency)
           .map((batch) => {
             const claimed = new Set(this.repository.markSegmentsProcessing(batch.map((segment) => segment.id)));
             return batch.filter((segment) => claimed.has(segment.id));

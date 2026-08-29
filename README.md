@@ -106,5 +106,6 @@ pnpm build
 - 原文由本地服务分句并生成稳定的 segment/token 位置，模型只负责结构化语义解释。
 - LLM 和 TTS 通过 adapter 接入，避免阅读器绑定某一家供应商。
 - 本地数据库和音频目录不进入 Git。
+- 组件样式不写硬编码颜色，统一引用 CSS 变量；六套主题（纸白 / 夜读 / 编辑部 / 雑誌 / 工作台 / 手帳）通过 `data-theme` 属性切换，规范见[主题系统](docs/theme-system.md)。
 
-详细设计见[技术架构方案](docs/architecture.md)和[迭代路线图](docs/roadmap.md)。
+详细设计见[技术架构方案](docs/architecture.md)、[迭代路线图](docs/roadmap.md)和[优化评审清单](docs/optimization-review.md)。

@@ -121,6 +121,7 @@ function documentContentType(document: MvpDocument): ContentType {
 const tokenCategoryLabels: Record<TokenCategory, string> = {
   word: "词语",
   particle: "助词",
+  functional: "功能词",
   adverb: "副词",
   grammar: "语法"
 };
@@ -133,6 +134,13 @@ function getTokenCategory(token: TokenAnalysis): TokenCategory {
   const partOfSpeech = token.partOfSpeech?.toLowerCase() ?? "";
   if (token.particleFunction) {
     return "particle";
+  }
+  if (
+    partOfSpeech.includes("助動詞")
+    || partOfSpeech.includes("助动词")
+    || partOfSpeech.includes("auxiliary")
+  ) {
+    return "functional";
   }
   if (partOfSpeech.includes("副词") || partOfSpeech.includes("adverb")) {
     return "adverb";

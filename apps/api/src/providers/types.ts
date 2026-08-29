@@ -44,6 +44,11 @@ export interface LlmProvider {
   readonly protocol: LlmProtocol;
   readonly model: string;
   readonly configured: boolean;
+  /**
+   * 单次请求允许的最大 completion token。
+   * 业务层用它来装箱：批次的估算成本必须留出安全余量，否则长句段凑一批会被截断。
+   */
+  readonly completionTokenBudget: number;
   analyze(request: AnalysisRequest): Promise<LlmAnalysisResult>;
 }
 

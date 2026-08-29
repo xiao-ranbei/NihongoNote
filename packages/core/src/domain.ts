@@ -42,7 +42,19 @@ export type ContentBlock = z.infer<typeof contentBlockSchema>;
 export const segmentStatusSchema = z.enum(["queued", "processing", "completed", "failed"]);
 export type SegmentStatus = z.infer<typeof segmentStatusSchema>;
 
-export const tokenCategorySchema = z.enum(["word", "particle", "adverb", "grammar"]);
+/**
+ * 五类对应界面上五种下划线线型（见 requirements.md 的线型规则）：
+ * 实线 word / 双线 particle / 虚线 functional / 点线 adverb / 波浪线 grammar。
+ * 「functional」指助动词、补助形容词这类承担语法功能但不算助词的功能词；
+ * 缺了它，模型只能把助动词塞进 word，界面上就永远画不出虚线。
+ */
+export const tokenCategorySchema = z.enum([
+  "word",
+  "particle",
+  "functional",
+  "adverb",
+  "grammar"
+]);
 export type TokenCategory = z.infer<typeof tokenCategorySchema>;
 
 export const documentSummarySchema = z.object({
@@ -85,6 +97,25 @@ export const updateSegmentInputSchema = z.object({
 });
 export type UpdateSegmentInput = z.infer<typeof updateSegmentInputSchema>;
 
+/**
+ * 置信度。
+ *
+ * 模型时不时把数字写成字符串（"0.9"），按原样严格要求会让整段分析结果作废。
+ * 这里只做「数字字符串 → 数字」的还原，不猜 high/medium/low 这类词的语义：
+ * 猜错了比直接报错更危险，那种情况宁可让调用方看到明确的 schema 错误。
+ */
+export const confidenceSchema = z.preprocess((value) => {
+  if (typeof value !== "string") {
+    return value;
+  }
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+  const parsed = Number(trimmed);
+  return Number.isFinite(parsed) ? parsed : value;
+}, z.number().min(0).max(1).nullable());
+
 export const tokenAnalysisSchema = z.object({
   tokenId: z.string().min(1),
   startOffset: z.number().int().nonnegative(),
@@ -99,7 +130,9 @@ export const tokenAnalysisSchema = z.object({
   particleFunction: z.string().min(1).nullable(),
   grammarPoint: z.string().min(1).nullable(),
   explanation: z.string().min(1).nullable(),
-  confidence: z.number().min(0).max(1).nullable()
+  // 模型偶发整段省略 confidence（实测 `tokens.0.confidence: Required`，finish_reason=stop，
+  // 不是截断而是输出完整性问题）。default(null) 让缺字段降级为「无置信度」而非整段失败。
+  confidence: confidenceSchema.default(null)
 });
 export type TokenAnalysis = z.infer<typeof tokenAnalysisSchema>;
 
@@ -128,7 +161,7 @@ const tokenAnalysisOverrideSchema = z.object({
   particleFunction: nullableOverrideStringSchema.optional(),
   grammarPoint: nullableOverrideStringSchema.optional(),
   explanation: nullableOverrideStringSchema.optional(),
-  confidence: z.number().min(0).max(1).nullable().optional()
+  confidence: confidenceSchema.optional()
 }).strict().refine((value) => Object.keys(value).some((key) => key !== "tokenId"), {
   message: "At least one token analysis field must be provided"
 });

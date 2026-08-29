@@ -1,7 +1,7 @@
 # 迭代路线图
 
 **目标**：先做一个能长期自用的本地学习闭环，再扩展到 Agent、浏览器扩展和多设备同步。
-**更新**：2026-08-28，确定 DeepSeek OpenAI-compatible API 为首条 LLM 实现路径，并将 P1 收敛为 token + 句子两层 MVP。
+**更新**：2026-08-29，环境首次跑通并完成端到端回归；两个 P0 缺陷（A-1 数据库落盘 / A-2 说话人正则）与 P1 优化项（T-1 分词合并 / T-2 提示词矛盾 / U-1 functional 类别）已修复并验证，实测数据见[第九节](#九进度审阅记录)。
 
 ## 一、阶段总览
 
@@ -15,6 +15,15 @@
 
 周期是单人开发、使用现成云服务、没有公网账号体系的粗略估算。当前先以 P1 MVP 验证基础定位、分析和取消闭环，再按真实使用反馈拆分完整范围渲染、编辑版本和等级解释层；模型选型可能增加时间。
 
+### 当前快照（2026-08-29 晚）
+
+| 工作流 | 状态 |
+| --- | --- |
+| P0 代码（骨架 / provider / 校验 / 取消重试） | **环境已跑通**：依赖安装完成，`pnpm typecheck` 全绿，前后端联通，真实 DeepSeek 分析 6/6 成功 |
+| P1 MVP（两层阅读交互 / 手动分析 / 修正 / 学习库） | 代码闭环完成；已完成一次端到端回归（6 segment 全部成功，分词边界 0 差异），完整两篇样本的质量/费用回归未跑 |
+| UI / 主题系统 | 样式 Token 化完成，六主题（`data-theme`）落地，主题切换 UI 待接入；结构层规范已立，见[主题系统](theme-system.md) |
+| 自动化测试 / lint | 有 `apps/api/scripts/verify-pipeline.ts`（20 项断言：分段 / 分词 / 落盘），`pnpm --filter @nihongonote/api verify`；ESLint 未引入 |
+
 ## 二、P0：验证和骨架
 
 当前已收录两篇真实商务对话，见[日语解析评估样本集](evaluation-corpus.md)。P0 仍需要普通文章、课文或混合材料，以避免模型只针对商务敬语场景优化。
@@ -27,6 +36,14 @@
 - 以 `deepseek-v4-flash`、`thinking` 和 `reasoning_effort` 配置验证 DeepSeek OpenAI-compatible API，使用真实材料做质量/费用验证；
 - 使用 `LLM_DEBUG_LOGGING` 检查实际请求 messages、推理参数、响应耗时和失败原因；
 - 记录 provider、protocol、model、promptVersion、用量和错误分类。
+
+### 2026-08-29 评审新增的 P0 修复项
+
+来自[优化评审清单](optimization-review.md)，先于样本回归完成：
+
+1. **A-2 说话人正则误吞原文**：`segmentation.ts` 的 `/^(\s*)([^：:\r\n]{1,40})[：:]/u` 会把 `https://…` 识别为 speaker 并吞掉前缀，新闻/说明文材料必踩；
+2. **A-1 数据库全量同步落盘**：`database.ts` 每次 `run()` 都全量 `export()` + `writeFileSync`，长文分析随数据增长持续劣化，需防抖/后台写；
+3. **环境跑通**：安装依赖，`pnpm dev` 与 `pnpm typecheck` 通过，首次真实启动验证。
 
 ### 不做
 
@@ -64,6 +81,16 @@ P1 MVP 已完成以下闭环：
 - 学习库折叠状态、搜索和分析状态筛选。
 
 已完成一段真实 DeepSeek 商务发言的连通性和 schema 验证（3 个句子均成功）；完整固定样本的质量/费用验收仍未完成。完整范围叠加、四层点击、区块/分句/范围编辑和等级解释层切换按下方 P1 后续增强推进。
+
+### 2026-08-29 评审新增的 P1 优化项
+
+来自[优化评审清单](optimization-review.md)，在完整样本回归**之前**完成（它们直接影响回归通过率）：
+
+- **T-1 分词碎片合并**：`Intl.Segmenter` 会把「ありがとうございます」切成 `["ありがとう","ご","ざ","い","ます"]`，碎片推高 LLM 输出成本且无独立语义；先在 `tokenization.ts` 加后处理合并，再评估是否引入 kuromoji.js；
+- **T-2 提示词矛盾修正**：`openai-compatible.ts` 中 "meaningful surface tokens" 与 "exactly one token analysis for each provided boundary" 冲突，会导致模型跳过碎片 → 数量校验失败 → 整段计失败；修正后递增 `LLM_PROMPT_VERSION`；
+- **U-1 线型语言补齐**：四类标注当前只靠颜色区分，违反需求"颜色不能作为唯一分类依据"；`functional` 的 Token 与 CSS 类已就位，待 `tokenCategorySchema` 增加类别；
+- **R-1 补 `toneEvidence` 字段**：支撑"解析能指出具体原文证据"的验收要求；
+- **测试基建**：引入 vitest，优先覆盖 `segmentation.ts` 偏移正确性与 `analysis-service.ts` 校验逻辑。
 
 ### P1 MVP 交付顺序
 
@@ -174,3 +201,121 @@ P1 MVP 已完成以下闭环：
 - 复杂的学习积分和社交功能。
 
 先确保每天打开工具时，分析、理解和复习这条链路足够顺畅。
+
+## 八、UI 与主题层进度（2026-08-29）
+
+决策：**六套 UI 提案全部保留为可切换主题**，先做好底层与 Token 化，不纠结视觉实现（三层模型：主题层可随意切换 / 结构层有限切换 / 底层与 UI 无关）。
+
+已完成：
+
+- **样式 Token 化**：`styles.css` 组件规则区零硬编码颜色，72 个语义 Token（字体 / 基础面 / 墨色 / 强调 / 边框 / 装饰 / 状态 / 阅读标注 / 五类词标注），机器校验通过；
+- **六主题落地**：`data-theme` = `paper`（默认，现行配色）/ `night` / `minimal` / `magazine` / `workbench` / `notebook`，对应六提案；DevTools 设 `document.documentElement.dataset.theme` 即可预览；
+- **结构层规范**：布局骨架用 `/* [layout] */` 标记，未来 `data-layout` 变体（magazine / workbench）只写差异规则，见[主题系统](theme-system.md)第六节；
+- **`functional` 标注预留**：Token 与 CSS 类就位，等数据模型增加类别即刻生效；
+- 设计稿：[六案提案画廊](ui-design-proposals.html)（tab / 数字键 1-6 切换）、[标注视觉原型](annotation-prototype.html)。
+
+待办（低优先级）：
+
+- `App.tsx` 接入主题切换下拉（localStorage + `prefers-color-scheme` 自动跟随）；
+- 非 `paper` 主题运行后按对比度微调；
+- 移动端学习库由堆叠改为覆盖式抽屉（需求 1.3）；
+- 提案 D/E 的 `data-layout` 布局变体推迟到范围标注功能稳定后评估。
+
+## 九、进度审阅记录
+
+- **2026-08-28**：全量代码与文档通读，产出[项目理解报告](../overview.md)与[优化评审清单](optimization-review.md)（2 个 P0 缺陷：说话人正则误吞 URL、数据库全量同步落盘；分词粒度 / prompt 矛盾 / 线型缺失 / 样式未 Token 化等问题与修复顺序）。
+- **2026-08-29**：Token 化与六主题完成；P0 修复项（A-1 / A-2 / 环境跑通）与 P1 优化项（T-1 / T-2 / U-1 / R-1 / 测试基建）纳入本路线图。
+
+### 2026-08-29 晚：环境跑通与端到端回归
+
+**环境**：`pnpm install` 完成（153 个包），`pnpm typecheck` 全绿（core / api / web），`pnpm dev` 下 API `:8787` 与 Web `:5173` 均正常。
+
+**修复并验证的四项**
+
+| 项 | 问题 | 处理 | 验证 |
+| --- | --- | --- | --- |
+| A-2 | 说话人正则把 `https://example.com`、`10:30` 的开头吞成 speaker，原文永久丢失 | 收紧正则：标签禁含 `/ \ @`、冒号后禁接数字与路径符、长度上限 20，并单独拦 `https`/`ftp` 等协议名 | 9 个分段用例通过；真实语料覆盖率 94.6%，丢失的 19 字全部是说话人标签本身 |
+| A-1 | 每次 `run()` 都全量 `export()` + 写文件，长文分析持续劣化 | 改为标脏 + 空闲 2 秒合并写 + 退出前补写，用临时文件 rename 原子替换 | 200 次写入期间文件大小不变；空闲后一次性落盘；重开读到 200/200 行；无 `.tmp` 残留 |
+| T-1 | `Intl.Segmenter` 把敬语活用尾切成单字碎片 | 三段后处理：剥离被粘住的助词 → 碎片向左并入词干 → 助词后的碎片向右并 | 真实语料 token 数 176 → 154，平均长度 1.77 → 2.07，单字占比 44.3% → 40.3% |
+| T-2 | 提示词"meaningful tokens"与"每条 boundary 必答"矛盾；`functional` 类别在 schema 中不存在 | 提示词改为逐条 boundary 必答并说明 functional 用法；`tokenCategorySchema` 补 `functional`；`confidence` 支持数字字符串还原 | 端到端 6/6 成功，模型输出与本地分词边界**0 差异**，类别分布 word 16 / particle 4 / functional 6 / adverb 2 |
+
+**新增的两个非预期缺陷（均已修复）**
+
+1. **输出被 token 上限截断**：实测单 segment 需 6575 completion tokens，其中 4863 是推理过程；batch=3 需约 19725，远超原 12000 上限，第一批必然失败。改为按批量自适应上限（`max(配置值, 批量 × 10000)`，不超 32000），并让错误信息带上限值与批量数。
+2. **`confidence` 被模型输出成字符串**：导致整段 schema 校验失败。提示词明确要求 JSON 数字，schema 侧用 `z.preprocess` 还原数字字符串（不猜 `high`/`medium` 的语义），并在 schema 不匹配时把原始返回写入调试日志。
+
+**实测费用与耗时**（`deepseek-v4-flash`，`thinking=enabled`，`reasoning_effort=medium`，batch=3 / concurrency=2）
+
+- 6 个 segment 分 2 批并发：prompt 3989 + completion 30912 = **34901 tokens**；
+- 其中推理过程 24119，**占输出的 78%**；
+- 墙钟约 **157 秒**（两批分别 72s / 157s）。
+
+这个比例意味着 reasoning 档位是当前最大的成本与速度杠杆，见下方待决策项。
+
+**待决策**：`reasoning_effort` 是否从 `medium` 下调到 `low`/`minimal`。降档可显著省钱提速，但需先验证解析质量是否可接受——建议用[评估样本集](evaluation-corpus.md)的两篇材料各跑一遍再定，不要凭直观判断。
+
+**测试基建**：`apps/api/scripts/verify-pipeline.ts`（`pnpm --filter @nihongonote/api verify`）覆盖分段 / 分词 / 落盘 / 响应解析共 23 项断言，含用子进程模拟「写完不关库直接退出」的崩溃补写验证。零新增依赖，可直接接入 CI。vitest 仍可后续按需引入。
+
+### 2026-08-29 深夜：两篇样本完整回归（LLM-002）
+
+用 `apps/api/scripts/regression-corpus.ts`（新增，走真实 repository + analysis-service，独立数据目录）跑了 `evaluation-corpus.md` 的两篇完整材料。
+
+配置同上一节，共 55 个 segment / 19 批请求。
+
+| 样本 | 原文字符 | 句段 | 成功 | 失败 | Token | 边界差异 | 耗时 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `business-requirements-interview-01` | 790 | 30 | 27 | 3 | 266 | **0** | 801.1s |
+| `business-requirements-confirmation-01` | 718 | 25 | 22 | 3 | 209 | **0** | 754.7s |
+
+**通过的维度**
+
+- **分词边界零差异**：模型返回的 475 个 token 与本地 `Intl.Segmenter` + 合并后处理的结果逐条比对，`tokenId` / `startOffset` / `endOffset` / `surface` 全部一致。这是定位方案（稳定 ID + UTF-16 偏移）可交付的关键证据。
+- **说话人与覆盖率**：说话人识别正确（样本 1 三个角色齐全，样本 2 只有李与田中部长）；覆盖率 94.5% / 93.9%，脚本导出的"遗漏片段"逐字证明缺口**只**是中文角色标签与冒号，没有吞掉任何日语正文。
+- **类别分布**：样本 1 word 140 / particle 76 / functional 39 / adverb 7 / grammar 4；样本 2 word 122 / particle 52 / functional 25 / adverb 5 / grammar 5。`functional`（虚线）已稳定产出。
+- **字段完整度**：`confidence` 475/475 全部解析为数值，无 null、无低于 0.5 的；`reading` / `explanation` 零缺失，仅样本 2 有 3 个 token 缺 `lemma`。
+
+**实测费用与耗时**：prompt 52831 + completion 385570 = **438401 tokens**，其中推理过程 280674（**占输出的 72.8%**）；19 批墙钟合计 2826 秒，均值 149 秒/批。
+
+**本轮暴露的两个新缺陷（第一个已修，第二个未修）**
+
+1. **模型在 JSON 字符串里输出裸控制字符**（已修）。症状是 `LLM returned invalid JSON: Bad control character in string literal`，一次坏响应会连带整批 3 个 segment 一起失败（样本 1 的 3 个失败即源于此）。修复：`parseJsonResponse` 在严格解析失败后，只对**字符串字面量内部**的 U+0000–U+001F 做转义再解析一次，不改动结构空白、不二次转义已转义序列、不丢弃内容；同时在真正失败时把原始响应片段写入调试日志（`llm.json.invalid`），否则下次排查只能重跑一遍请求。已补 3 条离线断言。
+2. **固定批量切分遇上长句段会被 token 上限截断**（未修）。样本 2 的 3 个失败即源于此：`resolveMaxTokens` 已按批量自适应到 30000，但该批仍打满（`finish_reason=length`）。根因是**按段数而非按成本切批**：实测 19 批数据显示 completion token ≈ 200–500 × 原文字符（均值 294，长句段更高），三个长句段凑一批必然超限。
+
+   建议改法（未实施）：新增成本估算与装箱函数（估算式 `3500 × 段数 + 230 × 原文字符`，对本次 19 个样本点均为上界），`AnalysisService` 按估算成本装箱而非固定段数，长句段自动单独成批；`LLM_BATCH_SIZE` 退化为"最多几段"的上限。配套建议：把 `reasoning_effort` 从 `medium` 下调，推理 token 占输出 72.8%，是成本、速度和截断率共同的杠杆。
+
+**结论**：LLM-002 的**质量与定位维度已通过**（475 个 token 零边界差异、字段完整、角色正确）；**可靠性维度未达标**——55 个 segment 中 6 个失败（10.9%），全部集中在 2 个批次。两个失败原因都定位清楚，第一个已修，第二个有明确改法。在跑下一轮完整回归前，建议先修第二个并下调推理档位，否则仍会有约 5% 的句段需要手动重试。
+
+### 2026-08-29 深夜（续）：装箱修复后的验证与第三个缺陷
+
+在上一节的两个缺陷都改完后，重跑了两个样本，逐项确认修复效果。
+
+**缺陷 1（裸控制字符）——已验证修复。** 样本 1 从 27/30 提升到 **30/30，0 失败**，本轮调试日志中 `llm.json.invalid` 事件为 **0**。
+
+**缺陷 2（长句段截断）——已验证修复。** 样本 2 单跑（`NIHONGO_REGRESSION_ONLY` 过滤）结果：
+
+| 样本 | 原文字符 | 句段 | 成功 | 失败 | Token | 边界差异 | 耗时 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `business-requirements-confirmation-01` | 718 | 25 | 23 | 2 | 244 | **0** | 1078.3s |
+
+调试日志：13 个批次，`finish_reason` 分布 `{ stop: 13 }`，**零截断**（上一轮是 3 个 segment 打满 30000 上限）；`max_tokens` 按批自适应到 24000–31759，实际 completion 5294–26302。装箱函数 `planBatches()` 按"估算成本"而非段数切批，长句段自动单独成批，行为符合预期。类别分布 word 139 / particle 64 / functional 28 / adverb 4 / grammar 9；成功句段的 confidence 244/244 均为数值。
+
+**代价**：批次数从 19 涨到 27，样本墙钟从约 801s 涨到 950–1078s（+19%）。这是换取零截断的必要支出，但说明单纯靠装箱不能解决成本问题——`reasoning_effort` 降档的决策优先级因此上升。
+
+**缺陷 3（模型漏输出 `confidence` 字段）——已修（2026-08-29 下午）。** 样本 2 的 2 个失败是**新的失败模式**，与之前的 T-2（confidence 以字符串形式返回）不同：
+
+```
+d7b143c0-...:segment:2：LLM analysis did not match the schema (tokens.0.confidence: Required)
+d7b143c0-...:segment:3：LLM analysis did not match the schema (tokens.0.confidence: Required)
+```
+
+根因：`packages/core/src/domain.ts` 里 `confidenceSchema` 是一个 `z.preprocess` 包装（已能容错 null / 数字字符串），但字段本身是 **Required**，模型整段漏掉这个键时校验直接失败。注意 `finish_reason` 是 `stop`，不是截断，所以这是模型的输出完整性问题，不是长度问题。
+
+修复（三道防线一起上，已实施并验证）：
+
+1. **契约层兜底**：`tokenAnalysisSchema` 里 `confidence: confidenceSchema.default(null)`——漏字段降级为"无置信度"而不是整段失败。输出类型不变（仍为 `number | null`），UI 尚未展示 confidence，无下游影响。显式 `null` / 数字字符串还原 / 越界拒绝（1.5、-0.1）等原行为逐一有断言守住。
+2. **提示词层加固**：`systemPrompt` 明确写出"每个 token 必须包含全部 14 个字段、不得省略任何一项，confidence 对每个 token 都是必填的 0–1 数字，不得缺失"——不再只靠 JSON Schema 的 `required` 兜底。
+3. **离线断言**：`verify-pipeline.ts` 新增「契约容错：token 缺 confidence」一组 3 条用例（缺字段降级 null / 三种形态原规则 / 越界拒绝）。
+
+验证：`pnpm typecheck` 全绿；`pnpm --filter @nihongonote/api verify` **30/30 通过**（27 → 30）。是否跑下一轮完整回归以确认 55/55 待定（预计约 35 分钟、与上一轮同量级 token）。
+
+**当前可靠性**：样本 1 30/30（100%），样本 2 23/25（92%），合计约 96%（上一轮 89%）。缺陷 3 是此前唯一已知失败原因，已修——下一轮完整回归若两样本均无失败，LLM-002 可靠性维度即可判定达标。

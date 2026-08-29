@@ -49,7 +49,7 @@ const environmentSchema = z.object({
   LLM_BATCH_SIZE: z.coerce.number().int().min(1).max(10).default(3),
   LLM_BATCH_CONCURRENCY: z.coerce.number().int().min(1).max(4).default(2),
   LLM_TIMEOUT_MS: z.coerce.number().int().positive().max(300_000).default(300_000),
-  LLM_PROMPT_VERSION: z.string().min(1).default("analysis-v1"),
+  LLM_PROMPT_VERSION: z.string().min(1).default("analysis-v3"),
   LLM_THINKING_TYPE: optionalThinkingTypeSchema,
   LLM_REASONING_EFFORT: optionalReasoningEffortSchema,
   LLM_DEBUG_LOGGING: booleanEnvironmentSchema,
