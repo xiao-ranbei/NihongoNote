@@ -1,16 +1,22 @@
 import {
   segmentAnalysisSchema,
+  type AnalysisPreview,
   type AnalysisProgress,
   type Segment,
   type SegmentAnalysis,
   type TokenAnalysis
 } from "@nihongonote/core";
 
+import {
+  countSegmentTokens,
+  estimateAnalysisTokens,
+  estimatePreviewCost
+} from "../analysis-preview.js";
+import { getDictionaryStats, getDictionaryVersion } from "../dictionary/lookup.js";
 import { DocumentRepository } from "../repositories/document-repository.js";
 import { packingSafetyRatio, planBatches } from "../llm-budget.js";
 import { estimateCost } from "../llm-pricing.js";
-import { lookupToken } from "../dictionary/lookup.js";
-import { alignMorphology, tokenizeWithMorphology } from "../morphology.js";
+import { prepareSegmentTokens } from "../segment-preparation.js";
 import type {
   LlmAnalysisResult,
   LlmProvider,
@@ -66,59 +72,6 @@ function validateAnalysis(
   }
 
   return parsed;
-}
-
-export interface PreparedSegmentTokens {
-  /** 词典/形态素命中的 token（本地确定，不进 LLM） */
-  localTokens: TokenAnalysis[];
-  /** 未命中的 token 边界（LLM 只处理这些） */
-  llmBoundaries: TokenBoundary[];
-}
-
-/**
- * 三层链路第 ①② 层（本地预处理，零 token，设计文档 3.1/3.3）：
- * 形态素对齐填充事实字段 + 固定用法库查表命中解释层。
- *
- * 命中规则：
- * - 词典命中 → 构造瘦身 TokenAnalysis（source=dictionary，省略恒定 null 字段）；
- *   事实字段（lemma/reading/partOfSpeech/conjugation）优先取形态素对齐结果；
- * - 未命中 → 该 token 进入 LLM 候选（llmBoundaries）。
- */
-export async function prepareSegmentTokens(
-  segment: Segment,
-  boundaries: TokenBoundary[]
-): Promise<PreparedSegmentTokens> {
-  const morphology = await tokenizeWithMorphology(segment.text);
-  const aligned = alignMorphology(boundaries, morphology);
-
-  const localTokens: TokenAnalysis[] = [];
-  const llmBoundaries: TokenBoundary[] = [];
-
-  for (const boundary of boundaries) {
-    const dictHit = lookupToken(boundary.surface);
-    if (!dictHit) {
-      llmBoundaries.push(boundary);
-      continue;
-    }
-    const morph = aligned.get(boundary.tokenId);
-    localTokens.push({
-      tokenId: boundary.tokenId,
-      startOffset: boundary.startOffset,
-      endOffset: boundary.endOffset,
-      surface: boundary.surface,
-      category: dictHit.category,
-      lemma: morph?.lemma ?? null,
-      reading: morph?.reading ?? dictHit.reading ?? null,
-      partOfSpeech: morph?.partOfSpeech ?? null,
-      conjugation: morph?.conjugation ?? null,
-      gloss: dictHit.gloss,
-      explanation: dictHit.explanation,
-      confidence: dictHit.confidence,
-      source: "dictionary"
-    });
-  }
-
-  return { localTokens, llmBoundaries };
 }
 
 /**
@@ -242,6 +195,135 @@ export class AnalysisService {
     }
 
     return this.getProgress(documentId);
+  }
+
+  /**
+   * 仅词典分析（设计文档 3.4/3.6，零 LLM 调用，零费用）：
+   *
+   * 只处理词典/形态素命中的 token——命中者瘦身落库（source=dictionary），
+   * 未命中 token 不进入分析（不编造解释）；句段级语义字段（translation/tone 等）
+   * 全部为 null。全部本地完成，同步返回最新进度；找不到文章返回 undefined。
+   *
+   * 语义与「完整分析」保持一致：只处理 queued 句段，已完成句段保留不动
+   * （重复运行不会重复计费，也不会删除已有 AI 分析）。
+   */
+  public async startDictionaryOnly(documentId: string): Promise<AnalysisProgress | undefined> {
+    const document = this.repository.getById(documentId);
+    if (!document) {
+      return undefined;
+    }
+
+    this.repository.markDocumentAnalyzing(documentId);
+    for (const segment of document.segments) {
+      const claimed = this.repository.markSegmentProcessing(segment.id);
+      if (!claimed) {
+        continue; // 非 queued（已完成/失败）的句段跳过，保留现有结果
+      }
+      const boundaries = tokenizeJapanese(segment.text, segment.id);
+      const { localTokens } = await prepareSegmentTokens(segment, boundaries);
+      const analysis = segmentAnalysisSchema.parse({
+        segmentId: segment.id,
+        translation: null,
+        grammarSummary: null,
+        tone: null,
+        politeness: null,
+        impliedMeaning: null,
+        replyReason: null,
+        uncertaintyNote: null,
+        tokens: localTokens,
+        schemaVersion: 1,
+        dictionaryCoverage: {
+          matched: localTokens.length,
+          total: boundaries.length
+        }
+      });
+      this.repository.saveSegmentAnalysis(
+        segment.id,
+        analysis,
+        "dictionary",
+        "local",
+        this.dictionaryVersion,
+        null
+      );
+    }
+    return this.repository.finalizeDocumentAnalysis(documentId);
+  }
+
+  /**
+   * 工具页策略/费用预览（设计文档 §六-4，纯本地统计，零 LLM 调用）。
+   *
+   * 对每篇文章做分词 + 三层链路本地预处理，统计词典覆盖率与未命中 token，
+   * 再按当前模型内置价格表估算闲时/高峰两档费用。不存在的文章直接跳过。
+   */
+  public async previewAnalysis(documentIds: string[]): Promise<AnalysisPreview> {
+    const documents: AnalysisPreview["documents"] = [];
+    const totals: AnalysisPreview["totals"] = {
+      segmentCount: 0,
+      totalTokens: 0,
+      matchedTokens: 0,
+      unmissedTokens: 0,
+      dictionaryCoverage: 0,
+      estimatedInputTokens: 0,
+      estimatedOutputTokens: 0,
+      estimatedTotalTokens: 0,
+      estimatedCost: null
+    };
+
+    for (const documentId of documentIds) {
+      const document = this.repository.getById(documentId);
+      if (!document) {
+        continue;
+      }
+      const stats = await countSegmentTokens(document.segments);
+      const estimate = estimateAnalysisTokens(document.segments.length, stats.unmissedTokens);
+      const estimatedCost = estimatePreviewCost(this.provider.model, estimate);
+      documents.push({
+        documentId: document.id,
+        title: document.title,
+        segmentCount: document.segments.length,
+        totalTokens: stats.totalTokens,
+        matchedTokens: stats.matchedTokens,
+        unmissedTokens: stats.unmissedTokens,
+        dictionaryCoverage: stats.totalTokens > 0 ? stats.matchedTokens / stats.totalTokens : 0,
+        estimatedInputTokens: estimate.inputTokens,
+        estimatedOutputTokens: estimate.outputTokens,
+        estimatedTotalTokens: estimate.totalTokens,
+        estimatedCost
+      });
+      totals.segmentCount += document.segments.length;
+      totals.totalTokens += stats.totalTokens;
+      totals.matchedTokens += stats.matchedTokens;
+      totals.unmissedTokens += stats.unmissedTokens;
+      totals.estimatedInputTokens += estimate.inputTokens;
+      totals.estimatedOutputTokens += estimate.outputTokens;
+      totals.estimatedTotalTokens += estimate.totalTokens;
+    }
+    totals.dictionaryCoverage = totals.totalTokens > 0
+      ? totals.matchedTokens / totals.totalTokens
+      : 0;
+    totals.estimatedCost = estimatePreviewCost(
+      this.provider.model,
+      {
+        inputTokens: totals.estimatedInputTokens,
+        outputTokens: totals.estimatedOutputTokens,
+        totalTokens: totals.estimatedTotalTokens
+      }
+    );
+
+    return {
+      dictionaryVersion: getDictionaryVersion(),
+      dictionaryStats: getDictionaryStats(),
+      provider: {
+        configured: this.provider.configured,
+        model: this.provider.model
+      },
+      documents,
+      totals
+    };
+  }
+
+  private get dictionaryVersion(): string {
+    return getDictionaryVersion();
   }
 
   public retrySegment(segmentId: string): AnalysisProgress | undefined {

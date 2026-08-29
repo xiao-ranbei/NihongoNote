@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { analysisModeSchema, type AnalysisProgress } from "@nihongonote/core";
 import { z } from "zod";
 
 import { AnalysisService } from "../services/analysis-service.js";
@@ -19,6 +20,13 @@ const segmentParamsSchema = z.object({
   segmentId: z.string().min(1).max(500)
 }).strict();
 const emptyBodySchema = z.object({}).strict().nullish();
+const previewBodySchema = z.object({
+  documentIds: z.array(z.string().min(1).max(500)).min(1).max(100)
+}).strict();
+const batchStartBodySchema = z.object({
+  documentIds: z.array(z.string().min(1).max(500)).min(1).max(100),
+  mode: analysisModeSchema
+}).strict();
 
 function invalidInput(reply: {
   code: (statusCode: number) => { send: (payload: unknown) => unknown };
@@ -126,5 +134,44 @@ export function registerAnalysisRoutes(
       });
     }
     return reply.code(202).send(progress);
+  });
+
+  /*
+   * 分析工具页（设计文档 §六-4，落实 LLM-011/LLM-013）：
+   * - POST /api/analysis/preview —— 纯本地统计（词典覆盖 + 估算 token/费用），零 LLM 调用；
+   * - POST /api/analysis/start —— 批量启动，「完整分析」或「仅词典分析」两种模式。
+   */
+
+  app.post("/api/analysis/preview", async (request, reply) => {
+    const body = previewBodySchema.safeParse(request.body);
+    if (!body.success) {
+      return invalidInput(reply, body.error.flatten());
+    }
+    return service.previewAnalysis(body.data.documentIds);
+  });
+
+  app.post("/api/analysis/start", async (request, reply) => {
+    const body = batchStartBodySchema.safeParse(request.body);
+    if (!body.success) {
+      return invalidInput(reply, body.error.flatten());
+    }
+    const { documentIds, mode } = body.data;
+    if (mode === "full" && !provider.configured) {
+      return providerNotConfigured(reply);
+    }
+
+    const started: AnalysisProgress[] = [];
+    const skipped: Array<{ documentId: string; reason: string }> = [];
+    for (const documentId of documentIds) {
+      const progress = mode === "full"
+        ? service.start(documentId)
+        : await service.startDictionaryOnly(documentId);
+      if (progress) {
+        started.push(progress);
+      } else {
+        skipped.push({ documentId, reason: "DOCUMENT_NOT_FOUND" });
+      }
+    }
+    return { mode, started, skipped };
   });
 }

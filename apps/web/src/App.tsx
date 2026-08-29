@@ -34,6 +34,7 @@ import {
   updateSegmentAnalysis,
   type SegmentAnalysisUpdateInput
 } from "./api/client";
+import { AnalysisTools } from "./analysis-tools";
 import "./styles.css";
 
 const levelOptions: Array<{ value: TargetLevel; label: string }> = [
@@ -810,6 +811,7 @@ function SegmentAnalysisPanel({
 }
 
 export default function App(): ReactElement {
+  const [view, setView] = useState<"reader" | "tools">("reader");
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [documents, setDocuments] = useState<MvpDocumentSummary[]>([]);
   const [selectedDocument, setSelectedDocument] = useState<MvpDocument | null>(null);
@@ -1167,6 +1169,13 @@ export default function App(): ReactElement {
         </div>
         <div className="topbar-actions">
           <button
+            className={`view-toggle ${view === "tools" ? "is-active" : ""}`}
+            onClick={() => setView(view === "reader" ? "tools" : "reader")}
+            type="button"
+          >
+            {view === "reader" ? "分析工具" : "返回阅读"}
+          </button>
+          <button
             aria-expanded={isLibraryOpen}
             className="library-toggle"
             onClick={() => setIsLibraryOpen((current) => !current)}
@@ -1194,8 +1203,8 @@ export default function App(): ReactElement {
         </div>
       </header>
 
-      <main className={`workspace ${isLibraryOpen ? "" : "library-collapsed"}`}>
-        {isLibraryOpen ? (
+      <main className={`workspace ${view === "tools" || !isLibraryOpen ? "library-collapsed" : ""}`}>
+        {view === "tools" ? null : isLibraryOpen ? (
           <aside className="library-panel">
             <div className="panel-heading">
               <div>
@@ -1268,6 +1277,10 @@ export default function App(): ReactElement {
         ) : null}
 
         <section className="content-panel">
+          {view === "tools" ? (
+            <AnalysisTools />
+          ) : (
+            <>
           {error ? <div className="error-banner">{error}</div> : null}
 
           <form className="composer-card" onSubmit={(event) => void handleCreateDocument(event)}>
@@ -1514,6 +1527,8 @@ export default function App(): ReactElement {
                 粘贴课文、普通文章或对话后，原文会保持连续显示。AI 分析会为词语、助词、副词、语法和整句语气提供可点击的解释。
               </p>
             </div>
+          )}
+            </>
           )}
         </section>
       </main>

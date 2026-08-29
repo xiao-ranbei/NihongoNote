@@ -1,6 +1,12 @@
 export {
+  analysisCostEstimateSchema,
+  analysisModeSchema,
+  analysisPreviewDocumentSchema,
+  analysisPreviewSchema,
   apiErrorSchema,
   analysisRevisionSchema,
+  batchAnalysisStartResponseSchema,
+  batchAnalysisStartSchema,
   contentBlockSchema,
   contentTypeSchema,
   contentTypeSourceSchema,
@@ -26,9 +32,15 @@ export {
 } from "./domain.js";
 
 export type {
+  AnalysisCostEstimate,
+  AnalysisMode,
+  AnalysisPreview,
+  AnalysisPreviewDocument,
   ApiError,
   AnalysisRevision,
   AnalysisProgress,
+  BatchAnalysisStart,
+  BatchAnalysisStartResponse,
   ContentBlock,
   ContentType,
   ContentTypeSource,

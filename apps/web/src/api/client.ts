@@ -1,5 +1,10 @@
 import {
+  analysisModeSchema,
+  analysisPreviewSchema,
   analysisProgressSchema,
+  batchAnalysisStartResponseSchema,
+  type AnalysisMode,
+  type AnalysisPreview,
   type ContentType,
   documentDetailSchema,
   documentSummarySchema,
@@ -7,6 +12,7 @@ import {
   llmBalanceSchema,
   segmentViewSchema,
   type AnalysisProgress,
+  type BatchAnalysisStartResponse,
   type CreateDocumentInput,
   type DocumentStatus,
   type DocumentDetail,
@@ -216,3 +222,41 @@ export function updateSegmentAnalysis(
     (payload) => segmentViewSchema.parse(payload)
   );
 }
+
+/**
+ * 分析工具页：策略/费用预览（纯本地统计，零 LLM 调用，不产生任何费用）。
+ */
+export function previewAnalysis(documentIds: string[]): Promise<AnalysisPreview> {
+  return request(
+    "/api/analysis/preview",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ documentIds })
+    },
+    (payload) => analysisPreviewSchema.parse(payload)
+  );
+}
+
+/**
+ * 分析工具页：批量启动分析。
+ * mode="full" 走词典 + AI（按量计费）；mode="dictionary-only" 零费用，不调用 LLM。
+ */
+export function startBatchAnalysis(
+  documentIds: string[],
+  mode: AnalysisMode
+): Promise<BatchAnalysisStartResponse> {
+  return request(
+    "/api/analysis/start",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ documentIds, mode })
+    },
+    (payload) => batchAnalysisStartResponseSchema.parse(payload)
+  );
+}
+
+/** 仅供工具页校验 mode 值（与 core 契约保持一致）。 */
+export { analysisModeSchema };
+export type { AnalysisMode, AnalysisPreview };

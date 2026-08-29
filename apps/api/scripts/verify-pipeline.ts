@@ -34,15 +34,22 @@ import {
 } from "../src/dictionary/lookup.js";
 import { functionalEntries, particleEntries } from "../src/dictionary/data.js";
 import {
+  countSegmentTokens,
+  estimateAnalysisTokens,
+  estimateDurationSeconds,
+  estimatePreviewCost,
+  previewCoefficients
+} from "../src/analysis-preview.js";
+import {
   alignMorphology,
   categoryForPos,
   tokenizeWithMorphology
 } from "../src/morphology.js";
 import {
   AnalysisService,
-  mergeAnalysis,
-  prepareSegmentTokens
+  mergeAnalysis
 } from "../src/services/analysis-service.js";
+import { prepareSegmentTokens } from "../src/segment-preparation.js";
 import { DocumentRepository } from "../src/repositories/document-repository.js";
 import type { LlmAnalysisResult, LlmProvider } from "../src/providers/types.js";
 import { createDatabase } from "../src/db/database.js";
@@ -898,6 +905,131 @@ check("费用：未知模型与空用量返回 null，不编数", () => {
   }, new Date()), null, "未内置价格的模型应返回 null");
   assert.equal(estimateCost("deepseek-v4-flash", null, new Date()), null, "空用量应返回 null");
   return "未知模型/空用量 → null";
+});
+
+console.log("=== 工具页：预览统计与费用估算（步骤 4）===");
+// 实施步骤 4：纯本地统计（零 LLM 调用），词典覆盖 / 估算 token / 闲时与高峰费用 / 时长。
+// 预览数据全部提前计算（check 回调内只做同步断言）。
+const previewText = "これは私の本です。毎日日本語を勉強しています。";
+const previewSegments = splitIntoSegments(previewText, "doc:preview");
+const previewStats = await countSegmentTokens(previewSegments);
+const previewEstimate = estimateAnalysisTokens(previewSegments.length, previewStats.unmissedTokens);
+
+check("工具页：预览统计不重不漏、助词命中/普通词未命中", () => {
+  assert.ok(previewStats.totalTokens > 0, "应有 token");
+  assert.equal(
+    previewStats.matchedTokens + previewStats.unmissedTokens,
+    previewStats.totalTokens,
+    "命中 + 未命中必须等于总数"
+  );
+  assert.ok(previewStats.matchedTokens >= 3, "は/の/です 至少 3 个应命中");
+  assert.ok(previewStats.unmissedTokens > 0, "普通词（これ/私/本/勉強）应未命中交 LLM");
+  return `total ${previewStats.totalTokens} = 命中 ${previewStats.matchedTokens} + 未命中 ${previewStats.unmissedTokens}`;
+});
+check("工具页：token 估算 = 段级开销 + 未命中 token 开销", () => {
+  const expectedOutput = previewSegments.length * previewCoefficients.outputTokensPerSegmentOverhead
+    + previewStats.unmissedTokens * previewCoefficients.outputTokensPerUnmissedToken;
+  assert.equal(previewEstimate.outputTokens, expectedOutput, "输出估算应精确等于系数公式");
+  const expectedInput = previewSegments.length * previewCoefficients.inputTokensPerSegment
+    + previewStats.unmissedTokens * previewCoefficients.inputTokensPerUnmissedToken;
+  assert.equal(previewEstimate.inputTokens, expectedInput, "输入估算应精确等于系数公式");
+  assert.equal(
+    previewEstimate.totalTokens,
+    previewEstimate.inputTokens + previewEstimate.outputTokens,
+    "总 token = 输入 + 输出"
+  );
+  return `输入 ${previewEstimate.inputTokens} / 输出 ${previewEstimate.outputTokens} / 总 ${previewEstimate.totalTokens}`;
+});
+check("工具页：费用两档估算（闲时 ≤ 高峰）", () => {
+  const cost = estimatePreviewCost("deepseek-v4-flash", previewEstimate);
+  assert.ok(cost, "内置模型应有价格表");
+  assert.ok(cost!.offPeak !== null && cost!.peak !== null, "两档都应可估算");
+  assert.ok(cost!.offPeak! <= cost!.peak!, "闲时单价应不高于高峰");
+  return `闲时 ¥${cost!.offPeak!.toFixed(4)} / 高峰 ¥${cost!.peak!.toFixed(4)}`;
+});
+check("工具页：未知模型费用返回 null（不编数）", () => {
+  assert.equal(estimatePreviewCost("gpt-4o", previewEstimate), null);
+  return "未知模型 → null，前端显示「价格未知」";
+});
+check("工具页：时长估算随输出 token 单调", () => {
+  const short = estimateDurationSeconds(100);
+  const long = estimateDurationSeconds(10_000);
+  assert.ok(long > short, "输出越多时长越长");
+  assert.equal(short, 3, "ceil(100/40)=3 秒");
+  return `${short} 秒 → ${long} 秒`;
+});
+
+console.log("=== 工具页：仅词典分析与批量预览（端到端）===");
+// startDictionaryOnly：零 LLM 调用，只落库词典命中的瘦身 token，段级字段全 null；
+// previewAnalysis：结构、汇总与 provider 信息。
+const toolsDir = path.resolve(process.cwd(), "data", "_verify");
+const toolsFile = path.join(toolsDir, "tools.db");
+fs.rmSync(toolsDir, { recursive: true, force: true });
+const toolsDb = await createDatabase(toolsFile);
+const toolsRepo = new DocumentRepository(toolsDb);
+const toolsDoc = toolsRepo.create({
+  title: "工具页验证",
+  sourceText: "これは私の本です。",
+  targetLevel: "auto"
+});
+const toolsService = new AnalysisService(toolsRepo, mockProvider, "v-test");
+const dictOnlyProgress = await toolsService.startDictionaryOnly(toolsDoc.id);
+const dictOnlyRows = toolsDb.all<{ result_json: string; usage_json: string | null; provider: string; model: string }>(
+  "SELECT result_json, usage_json, provider, model FROM segment_analyses"
+);
+const dictOnlyAnalysis = dictOnlyRows.length > 0
+  ? JSON.parse(dictOnlyRows[0]!.result_json) as {
+      translation: string | null;
+      tone: string | null;
+      schemaVersion?: number;
+      dictionaryCoverage?: { matched: number; total: number };
+      tokens: Array<{ surface: string; source?: string; particleFunction?: unknown }>;
+    }
+  : null;
+const toolsPreview = await toolsService.previewAnalysis([toolsDoc.id, "doc:missing"]);
+toolsDb.close();
+fs.rmSync(toolsDir, { recursive: true, force: true });
+
+check("仅词典：全部段落库、token 全 dictionary 来源且瘦身", () => {
+  assert.ok(dictOnlyProgress, "仅词典分析应返回进度");
+  assert.equal(dictOnlyProgress!.status, "ready", "零 LLM 调用应直接完成");
+  assert.equal(dictOnlyProgress!.completedSegments, dictOnlyProgress!.totalSegments);
+  assert.ok(dictOnlyAnalysis, "应落库 segment_analyses");
+  assert.equal(dictOnlyAnalysis!.tokens.length, 3, "は/の/です 三个命中");
+  assert.deepEqual(
+    dictOnlyAnalysis!.tokens.map((token) => token.surface),
+    ["は", "の", "です"]
+  );
+  for (const token of dictOnlyAnalysis!.tokens) {
+    assert.equal(token.source, "dictionary");
+    assert.ok(!("particleFunction" in token), "瘦身 token 不应含恒定 null 键");
+  }
+  assert.deepEqual(dictOnlyAnalysis!.dictionaryCoverage, { matched: 3, total: 6 });
+  return `落库 3 个 dictionary token / coverage 3/6 / status=ready`;
+});
+check("仅词典：段级字段 null、零用量、来源标记 dictionary", () => {
+  assert.equal(dictOnlyAnalysis!.translation, null, "段级语义字段应为 null（不编造）");
+  assert.equal(dictOnlyAnalysis!.tone, null);
+  assert.equal(dictOnlyAnalysis!.schemaVersion, 1);
+  assert.equal(dictOnlyRows[0]!.usage_json, "null", "零 LLM 调用应无用量记录");
+  assert.equal(dictOnlyRows[0]!.provider, "dictionary");
+  assert.equal(dictOnlyRows[0]!.model, "local");
+  return "provider=dictionary / model=local / usage=null";
+});
+check("工具页：previewAnalysis 汇总、provider 信息与跳过缺失文章", () => {
+  assert.equal(toolsPreview.documents.length, 1, "不存在的文章应被跳过");
+  const doc = toolsPreview.documents[0]!;
+  assert.equal(doc.documentId, toolsDoc.id);
+  assert.equal(doc.matchedTokens + doc.unmissedTokens, doc.totalTokens, "命中+未命中=总数");
+  assert.equal(doc.matchedTokens, 3);
+  assert.ok(doc.estimatedTotalTokens > 0);
+  assert.equal(doc.estimatedCost, null, "mock-model 不在价格表 → 不编数");
+  assert.equal(toolsPreview.provider.configured, true);
+  assert.equal(toolsPreview.provider.model, "mock-model");
+  assert.equal(toolsPreview.dictionaryVersion, getDictionaryVersion());
+  assert.deepEqual(toolsPreview.totals.matchedTokens, doc.matchedTokens, "totals 应等于单篇汇总");
+  assert.deepEqual(toolsPreview.totals.estimatedTotalTokens, doc.estimatedTotalTokens);
+  return `coverage ${Math.round(doc.dictionaryCoverage * 100)}% / 预计 ${doc.estimatedTotalTokens} tokens / 缺失文章已跳过`;
 });
 
 console.log("");

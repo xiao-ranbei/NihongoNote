@@ -1826,3 +1826,338 @@ h2 {
   }
 }
 
+
+/* ============================================================
+   分析工具页（步骤 4：analysis-tools.tsx）
+   顶栏切换入口 + 多选文章 + 策略/费用预览 + 成本确认弹窗
+   ============================================================ */
+
+.view-toggle {
+  border: 1px solid var(--line-mid);
+  background: var(--panel-soft);
+  color: var(--ink);
+  border-radius: 999px;
+  padding: 0.35rem 0.9rem;
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+.view-toggle:hover {
+  background: var(--hover);
+  border-color: var(--line-accent-hover);
+}
+.view-toggle.is-active {
+  background: var(--tint-accent);
+  border-color: var(--line-accent);
+  color: var(--accent-deep);
+}
+
+.tools-page {
+  display: flex;
+  flex-direction: column;
+  gap: 1.2rem;
+  padding-bottom: 2rem;
+}
+.tools-section {
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  padding: 1rem 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+.tools-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+.tools-section h3 {
+  margin: 0;
+  font-size: 0.95rem;
+  color: var(--ink-strong);
+}
+
+.tools-document-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+.tools-document-item {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--line-faint);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+  background: var(--panel-soft);
+}
+.tools-document-item:hover {
+  background: var(--hover-soft);
+}
+.tools-document-item.is-selected {
+  border-color: var(--line-accent);
+  background: var(--tint-accent);
+}
+.tools-document-item input[type="checkbox"] {
+  accent-color: var(--accent);
+  flex: none;
+}
+.tools-document-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+  flex: 1;
+}
+.tools-document-main strong {
+  font-size: 0.92rem;
+  color: var(--ink-strong);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tools-document-main span {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.tools-progress-badge {
+  flex: none;
+  font-size: 0.75rem;
+  color: var(--status-run);
+  background: var(--status-run-bg);
+  border-radius: 999px;
+  padding: 0.15rem 0.55rem;
+}
+.tools-progress-badge.is-done {
+  color: var(--status-ok);
+  background: var(--status-ok-bg);
+}
+
+.tools-mode-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 0.6rem;
+}
+.tools-mode-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--line-faint);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.tools-mode-option:hover {
+  background: var(--hover-soft);
+}
+.tools-mode-option.is-selected {
+  border-color: var(--line-accent);
+  background: var(--tint-accent);
+}
+.tools-mode-option input[type="radio"] {
+  accent-color: var(--accent);
+  margin-top: 0.2rem;
+  flex: none;
+}
+.tools-mode-option span {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.tools-mode-option strong {
+  font-size: 0.9rem;
+  color: var(--ink-strong);
+}
+.tools-mode-option small {
+  font-size: 0.78rem;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.tools-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+.tools-preview-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 0.6rem;
+}
+.tools-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+.tools-stat span {
+  font-size: 0.74rem;
+  color: var(--text-label);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.tools-stat strong {
+  font-size: 1.05rem;
+  color: var(--ink-strong);
+}
+.tools-stat small {
+  font-size: 0.76rem;
+  color: var(--muted);
+  line-height: 1.4;
+}
+.tools-preview-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.tools-preview-detail p {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.tools-note-green {
+  color: var(--status-ok) !important;
+}
+.tools-note-warning {
+  color: var(--status-fail) !important;
+}
+
+.tools-start-row {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+}
+
+.tools-progress-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.tools-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--line-faint);
+  border-radius: 8px;
+  background: var(--panel-soft);
+}
+.tools-progress-title {
+  font-size: 0.86rem;
+  color: var(--ink-strong);
+  min-width: 10rem;
+  max-width: 18rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tools-progress-status {
+  flex: none;
+  font-size: 0.74rem;
+  border-radius: 999px;
+  padding: 0.12rem 0.5rem;
+}
+.tools-progress-status.status-ready {
+  color: var(--status-ok);
+  background: var(--status-ok-bg);
+}
+.tools-progress-status.status-failed {
+  color: var(--status-fail);
+  background: var(--status-fail-bg);
+}
+.tools-progress-status.status-draft,
+.tools-progress-status.status-analyzing {
+  color: var(--status-run);
+  background: var(--status-run-bg);
+}
+.tools-progress-track {
+  flex: 1;
+  min-width: 4rem;
+}
+.tools-progress-count {
+  flex: none;
+  font-size: 0.8rem;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.tools-progress-cost {
+  flex: none;
+  font-size: 0.8rem;
+  color: var(--accent-deep);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 成本确认弹窗（LLM-011：确认才发请求） */
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(30, 26, 20, 0.42);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  z-index: 40;
+}
+.confirm-dialog {
+  background: var(--panel);
+  border: 1px solid var(--line-mid);
+  border-radius: 14px;
+  box-shadow: 0 18px 50px rgba(30, 26, 20, 0.28);
+  max-width: 30rem;
+  width: 100%;
+  padding: 1.1rem 1.2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+.confirm-dialog .analysis-panel-heading {
+  align-items: flex-start;
+}
+.confirm-dialog h3 {
+  margin: 0;
+  font-size: 1rem;
+  color: var(--ink-strong);
+}
+.confirm-facts {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+.confirm-facts div {
+  display: flex;
+  gap: 0.8rem;
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+.confirm-facts dt {
+  flex: none;
+  width: 5.5rem;
+  color: var(--text-label);
+}
+.confirm-facts dd {
+  margin: 0;
+  color: var(--ink);
+  min-width: 0;
+}
+.confirm-note {
+  margin: 0;
+  font-size: 0.76rem;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.confirm-dialog .metadata-editor-actions {
+  justify-content: flex-end;
+  margin-top: 0.2rem;
+}

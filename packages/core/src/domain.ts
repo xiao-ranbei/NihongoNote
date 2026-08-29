@@ -322,6 +322,87 @@ export const healthResponseSchema = z.object({
 });
 export type HealthResponse = z.infer<typeof healthResponseSchema>;
 
+/**
+ * 分析工具页（设计文档 3.5/§六-4）契约。
+ *
+ * 工具页只做「选文章 → 预览 → 确认 → 看进度」单一动作：
+ * - preview：纯本地统计（词典覆盖率 + 估算 token/费用/时长），零 LLM 调用；
+ * - start：批量启动，「完整分析」（词典 + AI）或「仅词典分析」（零费用）两种模式。
+ */
+
+export const analysisModeSchema = z.enum(["full", "dictionary-only"]);
+export type AnalysisMode = z.infer<typeof analysisModeSchema>;
+
+/** 费用估算：闲时与高峰两档单价（模型不在内置价格表时整体为 null）。 */
+export const analysisCostEstimateSchema = z.object({
+  offPeak: z.number().nonnegative().nullable(),
+  peak: z.number().nonnegative().nullable()
+});
+export type AnalysisCostEstimate = z.infer<typeof analysisCostEstimateSchema>;
+
+/** 单篇文章的本地预览统计（纯本地计算，零 LLM 调用）。 */
+export const analysisPreviewDocumentSchema = z.object({
+  documentId: z.string().min(1),
+  title: z.string().min(1),
+  segmentCount: z.number().int().nonnegative(),
+  totalTokens: z.number().int().nonnegative(),
+  /** 词典/形态素命中的 token 数（不花 token） */
+  matchedTokens: z.number().int().nonnegative(),
+  /** 未命中 token 数（完整分析时走 LLM，按量计费） */
+  unmissedTokens: z.number().int().nonnegative(),
+  /** 词典覆盖率 = matched / total（total 为 0 时为 0） */
+  dictionaryCoverage: z.number().min(0).max(1),
+  estimatedInputTokens: z.number().int().nonnegative(),
+  estimatedOutputTokens: z.number().int().nonnegative(),
+  estimatedTotalTokens: z.number().int().nonnegative(),
+  estimatedCost: analysisCostEstimateSchema.nullable()
+});
+export type AnalysisPreviewDocument = z.infer<typeof analysisPreviewDocumentSchema>;
+
+export const analysisPreviewSchema = z.object({
+  dictionaryVersion: z.string().min(1),
+  dictionaryStats: z.object({
+    particles: z.number().int().nonnegative(),
+    functional: z.number().int().nonnegative(),
+    endings: z.number().int().nonnegative(),
+    total: z.number().int().nonnegative()
+  }),
+  /** 当前 LLM 配置（未配置时完整分析不可用，仅词典分析仍可用） */
+  provider: z.object({
+    configured: z.boolean(),
+    model: z.string().min(1).nullable()
+  }),
+  documents: z.array(analysisPreviewDocumentSchema),
+  totals: z.object({
+    segmentCount: z.number().int().nonnegative(),
+    totalTokens: z.number().int().nonnegative(),
+    matchedTokens: z.number().int().nonnegative(),
+    unmissedTokens: z.number().int().nonnegative(),
+    dictionaryCoverage: z.number().min(0).max(1),
+    estimatedInputTokens: z.number().int().nonnegative(),
+    estimatedOutputTokens: z.number().int().nonnegative(),
+    estimatedTotalTokens: z.number().int().nonnegative(),
+    estimatedCost: analysisCostEstimateSchema.nullable()
+  })
+});
+export type AnalysisPreview = z.infer<typeof analysisPreviewSchema>;
+
+export const batchAnalysisStartSchema = z.object({
+  documentIds: z.array(z.string().min(1).max(500)).min(1).max(100),
+  mode: analysisModeSchema
+}).strict();
+export type BatchAnalysisStart = z.infer<typeof batchAnalysisStartSchema>;
+
+export const batchAnalysisStartResponseSchema = z.object({
+  mode: analysisModeSchema,
+  started: z.array(analysisProgressSchema),
+  skipped: z.array(z.object({
+    documentId: z.string().min(1),
+    reason: z.string().min(1)
+  }))
+});
+export type BatchAnalysisStartResponse = z.infer<typeof batchAnalysisStartResponseSchema>;
+
 export const apiErrorSchema = z.object({
   error: z.string().min(1),
   message: z.string().min(1),

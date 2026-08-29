@@ -162,7 +162,7 @@
 1. **词典数据 + 查表服务**（纯后端，可离线验证）：固定用法库初始表 + `lookupToken()` + verify 断言；
 2. **kuromoji 集成**：✅ 已完成（2026-08-29）——新增 `morphology.ts`（kuromoji 封装 + pos→category 映射 + alignMorphology 偏移对齐）；实测对比后决策**并存**：边界保留现有合并后处理，kuromoji 只做事实字段；verify 9 条断言固化（57/57）；
 3. **analysis-service 三层链路**：✅ 已完成（2026-08-29）——core schema 扩展（TokenAnalysis.source / 解释字段 optional 瘦身 / segmentAnalysis.schemaVersion / dictionaryCoverage）；`prepareSegmentTokens()`（形态素+词典命中不进 LLM）+ `mergeAnalysis()`（按边界顺序合并、不重不漏、附加 coverage）；mock provider 端到端断言「LLM 只收到未命中 token」+ 瘦身落库（verify 62/62）；
-4. **工具页**：路由 + 选择文章（多选）+ 策略/费用预览 + 成本确认弹窗 + 唯一触发按钮 + 仅词典模式（落实 LLM-011/LLM-013）；
+4. **工具页**：✅ 已完成（2026-08-29）——`POST /api/analysis/preview`（纯本地统计词典覆盖 + 估算 token/闲时高峰费用/时长，零 LLM）+ `POST /api/analysis/start`（批量，full / dictionary-only 双模式）；`AnalysisService.startDictionaryOnly()`（仅词典零费用落库，瘦身 token + 段级字段 null + 来源标记 dictionary）；前端「分析工具」页（顶栏切换，多选文章 → 模式选择 → 策略/费用预览 → 成本确认弹窗 → 唯一触发按钮 → 进度轮询），落实 LLM-011/LLM-013；`prepareSegmentTokens` 独立为 `segment-preparation.ts` 供服务与预览共用（避免循环依赖）；verify 新增 8 条断言（70/70）；
 5. **回填沉淀**：用户在解析卡上「确认这条解释」→ 沉淀为缓存条目（UI 入口随工具页或解析卡）；
 6. **回归（需用户批准）**：用现有两篇样本跑词典覆盖率统计（纯本地查表可先行，不消耗 token）；AI 路径回归在用户许可后执行。
 
