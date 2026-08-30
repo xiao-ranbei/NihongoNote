@@ -4,6 +4,7 @@ import {
   type AnalysisProgress,
   type Segment,
   type SegmentAnalysis,
+  type SegmentFieldProfile,
   type TokenAnalysis
 } from "@nihongonote/core";
 
@@ -111,6 +112,7 @@ export function mergeAnalysis(
     segmentId: segment.id,
     translation: llmAnalysis.translation,
     grammarSummary: llmAnalysis.grammarSummary,
+    register: llmAnalysis.register,
     tone: llmAnalysis.tone,
     politeness: llmAnalysis.politeness,
     impliedMeaning: llmAnalysis.impliedMeaning,
@@ -148,7 +150,12 @@ export class AnalysisService {
     private readonly provider: LlmProvider,
     private readonly promptVersion: string,
     private readonly batchSize = 3,
-    private readonly batchConcurrency = 2
+    private readonly batchConcurrency = 2,
+    /**
+     * 段级语义字段档位默认值（config.LLM_SEGMENT_FIELDS）。
+     * 工具页请求显式传档位时覆盖它；预览估算与实际分析必须用同一档位。
+     */
+    private readonly defaultSegmentFields: SegmentFieldProfile = "standard"
   ) {}
 
   /**
@@ -177,7 +184,10 @@ export class AnalysisService {
     return { ...progress, usage, cost };
   }
 
-  public start(documentId: string): AnalysisProgress | undefined {
+  public start(
+    documentId: string,
+    segmentFields: SegmentFieldProfile = this.defaultSegmentFields
+  ): AnalysisProgress | undefined {
     const existingProgress = this.repository.getAnalysisProgress(documentId);
     if (!existingProgress) {
       return undefined;
@@ -191,7 +201,7 @@ export class AnalysisService {
         completion: Promise.resolve()
       };
       this.activeRuns.set(documentId, run);
-      run.completion = this.process(documentId, run);
+      run.completion = this.process(documentId, run, segmentFields);
     }
 
     return this.getProgress(documentId);
@@ -225,6 +235,7 @@ export class AnalysisService {
         segmentId: segment.id,
         translation: null,
         grammarSummary: null,
+        register: null,
         tone: null,
         politeness: null,
         impliedMeaning: null,
@@ -255,7 +266,10 @@ export class AnalysisService {
    * 对每篇文章做分词 + 三层链路本地预处理，统计词典覆盖率与未命中 token，
    * 再按当前模型内置价格表估算闲时/高峰两档费用。不存在的文章直接跳过。
    */
-  public async previewAnalysis(documentIds: string[]): Promise<AnalysisPreview> {
+  public async previewAnalysis(
+    documentIds: string[],
+    segmentFields: SegmentFieldProfile = this.defaultSegmentFields
+  ): Promise<AnalysisPreview> {
     const documents: AnalysisPreview["documents"] = [];
     const totals: AnalysisPreview["totals"] = {
       segmentCount: 0,
@@ -275,7 +289,7 @@ export class AnalysisService {
         continue;
       }
       const stats = await countSegmentTokens(document.segments);
-      const estimate = estimateAnalysisTokens(document.segments.length, stats.unmissedTokens);
+      const estimate = estimateAnalysisTokens(document.segments.length, stats.unmissedTokens, segmentFields);
       const estimatedCost = estimatePreviewCost(this.provider.model, estimate);
       documents.push({
         documentId: document.id,
@@ -315,7 +329,9 @@ export class AnalysisService {
       dictionaryStats: getDictionaryStats(),
       provider: {
         configured: this.provider.configured,
-        model: this.provider.model
+        model: this.provider.model,
+        // Ollama 等本地模型无 API 费用，前端据此显示「本地免费」而非「价格未知」
+        isLocal: this.provider.name === "ollama"
       },
       documents,
       totals
@@ -375,7 +391,8 @@ export class AnalysisService {
     run: ActiveRun,
     document: NonNullable<ReturnType<DocumentRepository["getById"]>>,
     allSegments: Segment[],
-    batch: Segment[]
+    batch: Segment[],
+    segmentFields: SegmentFieldProfile
   ): Promise<void> {
     // ① 本地边界（全量，确定性）
     const tokenBoundaries: SegmentTokenBoundaries[] = batch.map((segment) => ({
@@ -408,6 +425,7 @@ export class AnalysisService {
         contentType: document.contentType,
         targetLevel: document.targetLevel,
         promptVersion: this.promptVersion,
+        segmentFields,
         signal: run.controller.signal
       });
     } catch (reason: unknown) {
@@ -486,7 +504,11 @@ export class AnalysisService {
     }
   }
 
-  private async process(documentId: string, run: ActiveRun): Promise<void> {
+  private async process(
+    documentId: string,
+    run: ActiveRun,
+    segmentFields: SegmentFieldProfile
+  ): Promise<void> {
     try {
       while (this.isCurrent(documentId, run)) {
         const document = this.repository.getById(documentId);
@@ -519,7 +541,7 @@ export class AnalysisService {
           continue;
         }
         await Promise.all(
-          batches.map((batch) => this.processBatch(documentId, run, document, segments, batch))
+          batches.map((batch) => this.processBatch(documentId, run, document, segments, batch, segmentFields))
         );
       }
 

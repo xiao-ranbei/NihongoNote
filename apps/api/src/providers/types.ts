@@ -1,4 +1,4 @@
-import type { ContentType, Segment, SegmentAnalysis } from "@nihongonote/core";
+import type { ContentType, Segment, SegmentAnalysis, SegmentFieldProfile } from "@nihongonote/core";
 
 import type { TokenBoundary } from "../tokenization.js";
 
@@ -21,6 +21,11 @@ export interface AnalysisRequest {
   contentType: ContentType;
   targetLevel: string;
   promptVersion: string;
+  /**
+   * 段级语义字段档位（设计文档 3.8）。缺省由 provider 取默认档位（standard），
+   * 与 config.LLM_SEGMENT_FIELDS 保持一致。
+   */
+  segmentFields?: SegmentFieldProfile;
   signal: AbortSignal;
 }
 

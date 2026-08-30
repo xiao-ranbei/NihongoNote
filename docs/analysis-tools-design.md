@@ -110,7 +110,7 @@
 | 功能 | ① 选择文章（支持多选批量）；② 预览词典/AI 混合策略（词典覆盖多少 token、AI 只处理哪些）；③ 费用预览（按余额与闲时/高峰估算）；④ 明确按钮「开始 AI 分析」+ **成本确认弹窗**（预计 token/费用/时长/词典覆盖，确认才发请求，落实 LLM-011） |
 | 模式 | 「完整分析」（词典 + AI）与「仅词典分析」（零费用）两种模式可选 |
 | 取消/重试 | 复用现有分析进度与取消机制，工具页展示进度 |
-| 档位 | 工具页可临时选择 reasoning_effort（默认 minimal，来自配置） |
+| 档位 | 工具页可临时选择 reasoning_effort（默认 minimal，来自配置）；**段级语义字段档位**（minimal/standard/full，见 3.8）在模式选择区切换并自动重算预览 |
 
 ### 3.6 数据流变化
 
@@ -130,6 +130,41 @@
 - `segmentAnalysisSchema` 增加 `dictionaryCoverage?: { matched: number; total: number }`（预览与结果都可展示覆盖率）；
 - 落库 `segment_analyses` 沿用 result_json 内 source 字段；
 - JSON 内嵌 `schemaVersion`（见 issues I-7，随本方案一并实施）。
+
+### 3.8 段级语义字段档位（决策 5：档位制 + 键级省略）
+
+**背景**：段级固定开销 ≈3,500 输出 tokens/段，其中约 72.8% 是模型思考过程——字段越多，模型要斟酌的内容越多。7 个字段里 `replyReason`（仅对话段有意义）、`impliedMeaning`（多数为 null）、`tone`/`politeness`（可合并）对普通叙述文价值有限。
+
+**方案**：档位只改 systemPrompt 的字段要求，schema/存储/UI 完全兼容（缺失字段经 `default(null)` 降级，旧数据照常可读，无需迁移）。
+
+| 档位 | 要求模型输出的段级字段 | 预估输出/段 | 场景1（30 段）段级估算 |
+| --- | --- | --- | --- |
+| `full` | 全部 7 字段（历史行为） | ~3,500 | ~105,000 tokens |
+| `standard`（默认） | translation + grammarSummary + **register**（tone/politeness 合并）+ uncertaintyNote | ~2,200 | ~66,000 tokens |
+| `minimal` | translation + grammarSummary | ~1,500 | ~45,000 tokens |
+
+- **键级省略**（standard 起）：可选字段（register/uncertaintyNote）无值时不输出键——模型不为写 `null` 而思考，省序列化与思考 token；
+- **register 字段**：`segmentAnalysisSchema` 新增 `register`（nullable，向后兼容）；UI 展示 register 优先、tone/politeness 兜底（旧数据）；
+- **档位透传**：`LLM_SEGMENT_FIELDS` env 设默认档位（默认 standard）；工具页模式选择区可切换并自动重算预览（零 LLM）；预览估算（`previewCoefficientsByProfile`）与实际分析（`buildSystemPrompt(profile)`）用同一档位，费用估算口径一致；
+- **预览系数**：full 3,500/段 + 400/未命中 token（历史标定）；standard 2,200 + 320；minimal 1,500 + 300；输入侧三档同值（prompt 长短差异极小）。
+
+### 3.9 Ollama 本地模型支持（决策 6）
+
+**背景**：成本敏感用户可能希望零 API 费用跑本地模型（家用显卡/CPU）。现有 provider 抽象已统一走 OpenAI 兼容层，Ollama `/v1` 端点天然对齐。
+
+**方案**：
+
+| 项 | 方案 |
+| --- | --- |
+| 配置 | `LLM_PROVIDER=ollama`、`LLM_BASE_URL=http://127.0.0.1:11434/v1`、`LLM_MODEL=qwen3.5:9b`（示例；实现通用，模型可换）；**无需 `LLM_API_KEY`** |
+| configured | ollama 恒为 true（无 key 也算配置完成，localhost 免鉴权） |
+| client | 用占位 key `"ollama"` 构造 OpenAI SDK client（SDK 只要求非空字符串，Ollama 忽略 Authorization header） |
+| 余额 | `fetchBalance()` 对 ollama 直接返回 null（无 `/user/balance` 端点）→ 前端「余额未知」 |
+| 价格 | 模型不在内置价格表 → 预览费用显示「**本地免费（零 API 费用）**」（`preview.provider.isLocal=true`），而不是误导性的「价格未知」 |
+| JSON 模式 | ollama 不发 `response_format`（Ollama 兼容层对 JSON 模式支持不稳定），靠 prompt「Return raw JSON only」约束 |
+| thinking | 非 deepseek 默认不发 thinking/reasoning_effort（config 已有逻辑），本地模型直接输出 |
+
+**风险**：本地模型遵循 JSON 指令的能力决定可靠性（qwen3 系较好）；速度远慢于云端 API（时长估算按输出 token 速率已体现）；显存不足会 OOM（需用户自选合适量化档）。
 
 ---
 
@@ -170,6 +205,7 @@
 4. **工具页**：✅ 已完成（2026-08-29）——`POST /api/analysis/preview`（纯本地统计词典覆盖 + 估算 token/闲时高峰费用/时长，零 LLM）+ `POST /api/analysis/start`（批量，full / dictionary-only 双模式）；`AnalysisService.startDictionaryOnly()`（仅词典零费用落库，瘦身 token + 段级字段 null + 来源标记 dictionary）；前端「分析工具」页（顶栏切换，多选文章 → 模式选择 → 策略/费用预览 → 成本确认弹窗 → 唯一触发按钮 → 进度轮询），落实 LLM-011/LLM-013；`prepareSegmentTokens` 独立为 `segment-preparation.ts` 供服务与预览共用（避免循环依赖）；verify 新增 8 条断言（70/70）；
 5. ~~**回填沉淀**：用户在解析卡上「确认这条解释」→ 沉淀为缓存条目~~ → ❌ **已取消**（决策 2 调整）：用户回填的解释本身可能就有误，固化进缓存反而扩大错误面。改为「**离线扩充人工编辑的固定用法库**」作为「越用越省」的实现路径——每加一条人工校对条目，永久省一条 AI 解释的 token；
 6. **回归（需用户批准）**：用现有两篇样本跑词典覆盖率统计（纯本地查表可先行，不消耗 token）；AI 路径回归在用户许可后执行。
+7. **段级字段档位制 + Ollama 支持**：✅ 已完成（2026-08-30）——core 新增 `segmentFieldProfileSchema`（minimal/standard/full）与 `segmentAnalysisSchema.register`；prompt 档位化（`buildSystemPrompt`，standard 起键级省略）；`LLM_SEGMENT_FIELDS` env；预览系数按档位取值（full 3500 / standard 2200 / minimal 1500 每段）；工具页档位切换自动重算预览；Ollama provider 放行（无 key 视为 configured、余额不可用、预览显示「本地免费」、不发 response_format）；verify 新增档位系数断言。
 
 ---
 
@@ -181,6 +217,8 @@
 | 决策 2：解释缓存来源 | **固定用法库是唯一受信任解释来源**（2026-08-29 晚调整，砍掉「用户确认回填」以避免错误解释固化） | I-20 |
 | 决策 3：命中 token 存储 | **瘦身存储**（只存必要字段 + source，不存宽表） | I-17 |
 | 决策 4：句段级语义 | **仍走 AI + 词典化兜底**（句末语气模板）；提供「仅词典分析」模式 | I-18 |
+| 决策 5：段级字段档位（2026-08-30） | **档位制 + 键级省略**——minimal/standard/full 三档，默认 standard；合并 tone+politeness → register、可选字段无值不输出键；只改 prompt，schema/存储零迁移 | I-21 |
+| 决策 6：本地模型（2026-08-30） | **Ollama 支持**——registry 放行 provider 名，复用 OpenAI 兼容抽象；无 key 视为 configured、余额不可用、预览费用显示「本地免费」、不发 response_format | — |
 | 工具页形态（I-19） | 独立页面（倾向），实施时与设置页一并确认 | I-19 |
 
 ---
@@ -190,7 +228,9 @@
 - 助词类固定用法约占当前 token 的 30%（102/342 词条）；词典化助词 + 形态素填充事实字段，AI 输出可望减少 **40–50%**（4 事实字段本地化 + 助词缓存双管齐下，具体以词典覆盖率实测为准，纯本地可先行统计）；
 - 词典查表与形态素分析零 token、零费用；
 - 句段级语义（tone/replyReason）仍走 AI，是词典无法替代的部分；
-- `reasoning_effort=minimal` 已生效，进一步压缩推理 token。
+- `reasoning_effort=minimal` 已生效，进一步压缩推理 token；
+- **段级字段档位**（3.8）：standard 档将段级输出从 ~3,500 降到 ~2,200/段（省约 37%），minimal 档 ~1,500/段（省约 57%）；档位同时压缩模型「思考内容」，实际节省通常好于字段比例；场景 1（30 段）段级估算费用从 ¥0.47 降到 standard ¥0.31 / minimal ¥0.20（闲时）；
+- **Ollama 本地模型**（3.9）：零 API 费用，只消耗本地算力与时间，适合高频低预算场景。
 
 ---
 

@@ -1,5 +1,9 @@
 import type { FastifyInstance } from "fastify";
-import { analysisModeSchema, type AnalysisProgress } from "@nihongonote/core";
+import {
+  analysisModeSchema,
+  segmentFieldProfileSchema,
+  type AnalysisProgress
+} from "@nihongonote/core";
 import { z } from "zod";
 
 import { AnalysisService } from "../services/analysis-service.js";
@@ -21,11 +25,15 @@ const segmentParamsSchema = z.object({
 }).strict();
 const emptyBodySchema = z.object({}).strict().nullish();
 const previewBodySchema = z.object({
-  documentIds: z.array(z.string().min(1).max(500)).min(1).max(100)
+  documentIds: z.array(z.string().min(1).max(500)).min(1).max(100),
+  /** 段级语义字段档位（缺省用服务端 LLM_SEGMENT_FIELDS，默认 standard） */
+  segmentFields: segmentFieldProfileSchema.optional()
 }).strict();
 const batchStartBodySchema = z.object({
   documentIds: z.array(z.string().min(1).max(500)).min(1).max(100),
-  mode: analysisModeSchema
+  mode: analysisModeSchema,
+  /** 段级语义字段档位（缺省用服务端 LLM_SEGMENT_FIELDS，默认 standard） */
+  segmentFields: segmentFieldProfileSchema.optional()
 }).strict();
 
 function invalidInput(reply: {
@@ -147,7 +155,7 @@ export function registerAnalysisRoutes(
     if (!body.success) {
       return invalidInput(reply, body.error.flatten());
     }
-    return service.previewAnalysis(body.data.documentIds);
+    return service.previewAnalysis(body.data.documentIds, body.data.segmentFields);
   });
 
   app.post("/api/analysis/start", async (request, reply) => {
@@ -155,7 +163,7 @@ export function registerAnalysisRoutes(
     if (!body.success) {
       return invalidInput(reply, body.error.flatten());
     }
-    const { documentIds, mode } = body.data;
+    const { documentIds, mode, segmentFields } = body.data;
     if (mode === "full" && !provider.configured) {
       return providerNotConfigured(reply);
     }
@@ -164,7 +172,7 @@ export function registerAnalysisRoutes(
     const skipped: Array<{ documentId: string; reason: string }> = [];
     for (const documentId of documentIds) {
       const progress = mode === "full"
-        ? service.start(documentId)
+        ? service.start(documentId, segmentFields)
         : await service.startDictionaryOnly(documentId);
       if (progress) {
         started.push(progress);

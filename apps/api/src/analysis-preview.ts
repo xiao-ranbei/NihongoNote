@@ -1,4 +1,4 @@
-import type { Segment } from "@nihongonote/core";
+import type { Segment, SegmentFieldProfile } from "@nihongonote/core";
 
 import { estimateCost } from "./llm-pricing.js";
 import { prepareSegmentTokens } from "./segment-preparation.js";
@@ -17,25 +17,54 @@ import { tokenizeJapanese } from "./tokenization.js";
  * 估算系数是经验值，宁高勿低：高估只会让用户多预留预算，低估则会超支。
  */
 
+export interface PreviewCoefficients {
+  inputTokensPerSegment: number;
+  inputTokensPerUnmissedToken: number;
+  outputTokensPerSegmentOverhead: number;
+  outputTokensPerUnmissedToken: number;
+}
+
 /**
- * token 估算系数（标定自 2026-08-29 两篇评估样本 19 次真实请求，
- * 原始记录在 docs/regression-2026-08-29.md）：
+ * 各档位的 token 估算系数（标定自 2026-08-29 两篇评估样本 19 次真实请求，
+ * 原始记录在 docs/regression-2026-08-29.md；档位设计见 docs/analysis-tools-design.md 3.8）：
  *
  * - 实测 799 字/30 段 → 去重后输入 33,340 / 输出 192,052（medium 档，推理占输出 72.8%）；
- * - 段级固定开销 ≈ 3,500 输出 tokens/段（段级字段与推理的固定部分，
+ * - full 档段级固定开销 ≈ 3,500 输出 tokens/段（段级字段与推理的固定部分，
  *   与 llm-budget.completionOverheadPerSegment 同源）；
- * - 每未命中 token 输出 ≈ 400（14 字段宽表 JSON + 序号/上下文；
- *   旧档实测均值 561，reasoning_effort=minimal 压缩后取 400）；
- * - 输入：约 1,000/段（prompt 模板 + 原文 + 上下文）+ 80/未命中 token（boundary JSON）。
+ * - standard 档 ≈ 2,200/段（7 字段合并为 4 字段 + 键级省略，模型思考与序列化同步减少）；
+ * - minimal 档 ≈ 1,500/段（只输出翻译 + 语法要点）；
+ * - 每未命中 token 输出：full 400（14 字段宽表 JSON）/ standard 320 / minimal 300；
+ * - 输入：约 1,000/段（prompt 模板 + 原文 + 上下文）+ 80/未命中 token（boundary JSON），
+ *   三个档位差异极小（仅 prompt 字段清单长短），统一取同值。
  *
  * 词典命中的 token 不参与任何估算（零 token）。
  */
-export const previewCoefficients = {
-  inputTokensPerSegment: 1_000,
-  inputTokensPerUnmissedToken: 80,
-  outputTokensPerSegmentOverhead: 3_500,
-  outputTokensPerUnmissedToken: 400
-} as const;
+export const previewCoefficientsByProfile: Record<SegmentFieldProfile, PreviewCoefficients> = {
+  full: {
+    inputTokensPerSegment: 1_000,
+    inputTokensPerUnmissedToken: 80,
+    outputTokensPerSegmentOverhead: 3_500,
+    outputTokensPerUnmissedToken: 400
+  },
+  standard: {
+    inputTokensPerSegment: 1_000,
+    inputTokensPerUnmissedToken: 80,
+    outputTokensPerSegmentOverhead: 2_200,
+    outputTokensPerUnmissedToken: 320
+  },
+  minimal: {
+    inputTokensPerSegment: 1_000,
+    inputTokensPerUnmissedToken: 80,
+    outputTokensPerSegmentOverhead: 1_500,
+    outputTokensPerUnmissedToken: 300
+  }
+};
+
+/** 兼容导出：full 档系数（历史行为），verify 与既有引用不受影响。 */
+export const previewCoefficients = previewCoefficientsByProfile.full;
+
+/** 默认档位（与 config.LLM_SEGMENT_FIELDS 默认值保持一致）。 */
+export const defaultSegmentFieldProfile: SegmentFieldProfile = "standard";
 
 /** 时长估算速率（输出 tokens/秒），minimal 档经验值，宁慢勿快。 */
 export const estimatedTokensPerSecond = 40;
@@ -73,18 +102,20 @@ export async function countSegmentTokens(segments: Segment[]): Promise<TokenStat
   };
 }
 
-/** 按段数与未命中 token 数估算一次完整分析的输入/输出 tokens。 */
+/** 按段数、未命中 token 数与档位估算一次完整分析的输入/输出 tokens。 */
 export function estimateAnalysisTokens(
   segmentCount: number,
-  unmissedTokens: number
+  unmissedTokens: number,
+  profile: SegmentFieldProfile = defaultSegmentFieldProfile
 ): AnalysisTokenEstimate {
+  const coefficients = previewCoefficientsByProfile[profile];
   const inputTokens = Math.round(
-    segmentCount * previewCoefficients.inputTokensPerSegment
-    + unmissedTokens * previewCoefficients.inputTokensPerUnmissedToken
+    segmentCount * coefficients.inputTokensPerSegment
+    + unmissedTokens * coefficients.inputTokensPerUnmissedToken
   );
   const outputTokens = Math.round(
-    segmentCount * previewCoefficients.outputTokensPerSegmentOverhead
-    + unmissedTokens * previewCoefficients.outputTokensPerUnmissedToken
+    segmentCount * coefficients.outputTokensPerSegmentOverhead
+    + unmissedTokens * coefficients.outputTokensPerUnmissedToken
   );
   return {
     inputTokens,

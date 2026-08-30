@@ -38,7 +38,8 @@ import {
   estimateAnalysisTokens,
   estimateDurationSeconds,
   estimatePreviewCost,
-  previewCoefficients
+  previewCoefficients,
+  previewCoefficientsByProfile
 } from "../src/analysis-preview.js";
 import {
   alignMorphology,
@@ -691,6 +692,7 @@ check("三层：合并后顺序稳定、不重不漏、带 coverage 与 schemaVe
     segmentId: "seg:three",
     translation: "mock翻译",
     grammarSummary: "mock概括",
+    register: null,
     tone: "mock语气",
     politeness: "formal",
     impliedMeaning: null,
@@ -749,6 +751,7 @@ const mockProvider: LlmProvider = {
           segmentId: segment.id,
           translation: "mock翻译",
           grammarSummary: "mock概括",
+          register: null,
           tone: "mock语气",
           politeness: "formal",
           impliedMeaning: null,
@@ -913,7 +916,7 @@ console.log("=== 工具页：预览统计与费用估算（步骤 4）===");
 const previewText = "これは私の本です。毎日日本語を勉強しています。";
 const previewSegments = splitIntoSegments(previewText, "doc:preview");
 const previewStats = await countSegmentTokens(previewSegments);
-const previewEstimate = estimateAnalysisTokens(previewSegments.length, previewStats.unmissedTokens);
+const previewEstimate = estimateAnalysisTokens(previewSegments.length, previewStats.unmissedTokens, "full");
 
 check("工具页：预览统计不重不漏、助词命中/普通词未命中", () => {
   assert.ok(previewStats.totalTokens > 0, "应有 token");
@@ -939,6 +942,29 @@ check("工具页：token 估算 = 段级开销 + 未命中 token 开销", () => 
     "总 token = 输入 + 输出"
   );
   return `输入 ${previewEstimate.inputTokens} / 输出 ${previewEstimate.outputTokens} / 总 ${previewEstimate.totalTokens}`;
+});
+check("工具页：段级字段档位系数 full > standard > minimal（设计文档 3.8）", () => {
+  const standard = estimateAnalysisTokens(previewSegments.length, previewStats.unmissedTokens, "standard");
+  const minimal = estimateAnalysisTokens(previewSegments.length, previewStats.unmissedTokens, "minimal");
+  assert.equal(
+    previewCoefficientsByProfile.full.outputTokensPerSegmentOverhead,
+    3500,
+    "full 段级开销保持历史标定 3500"
+  );
+  assert.equal(
+    previewCoefficientsByProfile.standard.outputTokensPerSegmentOverhead,
+    2200,
+    "standard 段级开销 2200（字段合并 + 键级省略）"
+  );
+  assert.equal(
+    previewCoefficientsByProfile.minimal.outputTokensPerSegmentOverhead,
+    1500,
+    "minimal 段级开销 1500（仅翻译 + 语法）"
+  );
+  assert.ok(standard.outputTokens < previewEstimate.outputTokens, "standard 输出应少于 full");
+  assert.ok(minimal.outputTokens < standard.outputTokens, "minimal 输出应少于 standard");
+  assert.ok(standard.totalTokens < previewEstimate.totalTokens, "standard 总 token 应少于 full");
+  return `full ${previewEstimate.outputTokens} → standard ${standard.outputTokens} → minimal ${minimal.outputTokens} 输出 tokens`;
 });
 check("工具页：费用两档估算（闲时 ≤ 高峰）", () => {
   const cost = estimatePreviewCost("deepseek-v4-flash", previewEstimate);

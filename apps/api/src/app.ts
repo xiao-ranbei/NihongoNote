@@ -23,7 +23,8 @@ export async function createApp(config: AppConfig): Promise<FastifyInstance> {
     providers.llm,
     config.llmPromptVersion,
     config.llmBatchSize,
-    config.llmBatchConcurrency
+    config.llmBatchConcurrency,
+    config.llmSegmentFields
   );
 
   registerHealthRoutes(app, database);

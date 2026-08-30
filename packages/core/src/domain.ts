@@ -152,6 +152,11 @@ export const segmentAnalysisSchema = z.object({
   // 单字段缺失降级为 null（UI 显示「未提供」），不让整段 29 个正确字段一起作废。
   // 注意：segmentId 与 tokens 保持 Required —— 缺了它们本段分析没有定位依据。
   translation: z.string().min(1).nullable().default(null),
+  /**
+   * 语气与礼貌度的合并字段（档位 standard 输出；full 档仍用 tone/politeness 独立字段）。
+   * 旧数据无此字段（向后兼容）；UI 展示时 register 优先、tone/politeness 兜底。
+   */
+  register: z.string().min(1).nullable().default(null),
   grammarSummary: z.string().min(1).nullable().default(null),
   tone: z.string().min(1).nullable().default(null),
   politeness: z.string().min(1).nullable().default(null),
@@ -196,6 +201,7 @@ export type TokenAnalysisOverride = z.infer<typeof tokenAnalysisOverrideSchema>;
 export const segmentAnalysisOverrideSchema = z.object({
   translation: z.string().trim().min(1).optional(),
   grammarSummary: z.string().trim().min(1).optional(),
+  register: z.string().trim().min(1).optional(),
   tone: z.string().trim().min(1).optional(),
   politeness: z.string().trim().min(1).optional(),
   impliedMeaning: nullableOverrideStringSchema.optional(),
@@ -333,6 +339,17 @@ export type HealthResponse = z.infer<typeof healthResponseSchema>;
 export const analysisModeSchema = z.enum(["full", "dictionary-only"]);
 export type AnalysisMode = z.infer<typeof analysisModeSchema>;
 
+/**
+ * 段级语义字段档位（设计文档 3.8，成本治理）：
+ * - "minimal"：translation + grammarSummary（最省，适合纯查词/速读）；
+ * - "standard"（默认）：+ register（语气/礼貌合并）+ uncertaintyNote，可选字段键级省略；
+ * - "full"：全部 7 字段独立输出（tone/politeness/impliedMeaning/replyReason），历史行为。
+ * 档位只改变 systemPrompt 的字段要求与预览估算系数，schema 与存储完全兼容
+ * （缺失字段经 default(null) 降级，旧数据照常可读）。
+ */
+export const segmentFieldProfileSchema = z.enum(["minimal", "standard", "full"]);
+export type SegmentFieldProfile = z.infer<typeof segmentFieldProfileSchema>;
+
 /** 费用估算：闲时与高峰两档单价（模型不在内置价格表时整体为 null）。 */
 export const analysisCostEstimateSchema = z.object({
   offPeak: z.number().nonnegative().nullable(),
@@ -370,7 +387,12 @@ export const analysisPreviewSchema = z.object({
   /** 当前 LLM 配置（未配置时完整分析不可用，仅词典分析仍可用） */
   provider: z.object({
     configured: z.boolean(),
-    model: z.string().min(1).nullable()
+    model: z.string().min(1).nullable(),
+    /**
+     * 本地模型（如 Ollama）：无 API 费用，前端显示「本地免费」而非「价格未知」。
+     * 旧响应无此字段（向后兼容，默认 false）。
+     */
+    isLocal: z.boolean().default(false)
   }),
   documents: z.array(analysisPreviewDocumentSchema),
   totals: z.object({
@@ -389,7 +411,12 @@ export type AnalysisPreview = z.infer<typeof analysisPreviewSchema>;
 
 export const batchAnalysisStartSchema = z.object({
   documentIds: z.array(z.string().min(1).max(500)).min(1).max(100),
-  mode: analysisModeSchema
+  mode: analysisModeSchema,
+  /**
+   * 段级语义字段档位（设计文档 3.8）。缺省用服务端 LLM_SEGMENT_FIELDS（默认 standard）；
+   * 工具页成本确认弹窗可显式传档位，预览估算与实际分析必须使用同一档位。
+   */
+  segmentFields: segmentFieldProfileSchema.optional()
 }).strict();
 export type BatchAnalysisStart = z.infer<typeof batchAnalysisStartSchema>;
 

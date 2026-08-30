@@ -23,6 +23,12 @@ const optionalReasoningEffortSchema = z.preprocess(
   z.enum(["minimal", "low", "medium", "high", "xhigh"]).default("minimal")
 );
 
+const optionalSegmentFieldProfileSchema = z.preprocess(
+  (value) => typeof value === "string" && value.trim().length === 0 ? undefined : value,
+  // 段级语义字段档位（设计文档 3.8）：minimal 最省 / standard 默认 / full 全部 7 字段。
+  z.enum(["minimal", "standard", "full"]).default("standard")
+);
+
 const booleanEnvironmentSchema = z.preprocess((value) => {
   if (typeof value !== "string") {
     return value;
@@ -54,6 +60,7 @@ const environmentSchema = z.object({
   LLM_PROMPT_VERSION: z.string().min(1).default("analysis-v3"),
   LLM_THINKING_TYPE: optionalThinkingTypeSchema,
   LLM_REASONING_EFFORT: optionalReasoningEffortSchema,
+  LLM_SEGMENT_FIELDS: optionalSegmentFieldProfileSchema,
   LLM_DEBUG_LOGGING: booleanEnvironmentSchema,
   LLM_DEBUG_LOG_FILE: optionalStringSchema,
   TTS_PROVIDER: z.string().min(1).default("disabled"),
@@ -84,6 +91,7 @@ export const appConfig = {
   llmThinkingType: environment.LLM_THINKING_TYPE
     ?? (environment.LLM_PROVIDER === "deepseek" ? "enabled" : undefined),
   llmReasoningEffort: environment.LLM_REASONING_EFFORT,
+  llmSegmentFields: environment.LLM_SEGMENT_FIELDS,
   llmDebugLogging: environment.LLM_DEBUG_LOGGING,
   llmDebugLogFile: path.resolve(
     environment.LLM_DEBUG_LOG_FILE

@@ -17,6 +17,9 @@ export function createProviderRegistry(config: AppConfig): ProviderRegistry {
     config.llmProvider === "deepseek"
     || config.llmProvider === "openai"
     || config.llmProvider === "openai-compatible"
+    // Ollama 本地模型（设计文档 3.9）：/v1 端点与 OpenAI 兼容层天然对齐，
+    // 无 API key、无余额端点，configured/balance 由 provider 内部特判。
+    || config.llmProvider === "ollama"
   ) {
     if (config.llmProtocol !== "openai") {
       throw new Error(

@@ -602,6 +602,7 @@ function SegmentAnalysisPanel({
   const [draftSpeaker, setDraftSpeaker] = useState("");
   const [draftTranslation, setDraftTranslation] = useState("");
   const [draftGrammarSummary, setDraftGrammarSummary] = useState("");
+  const [draftRegister, setDraftRegister] = useState("");
   const [draftTone, setDraftTone] = useState("");
   const [draftPoliteness, setDraftPoliteness] = useState("");
   const [draftImpliedMeaning, setDraftImpliedMeaning] = useState("");
@@ -613,6 +614,7 @@ function SegmentAnalysisPanel({
     setDraftSpeaker(segment.speaker ?? "");
     setDraftTranslation(segment.analysis?.translation ?? "");
     setDraftGrammarSummary(segment.analysis?.grammarSummary ?? "");
+    setDraftRegister(segment.analysis?.register ?? "");
     setDraftTone(segment.analysis?.tone ?? "");
     setDraftPoliteness(segment.analysis?.politeness ?? "");
     setDraftImpliedMeaning(segment.analysis?.impliedMeaning ?? "");
@@ -632,6 +634,7 @@ function SegmentAnalysisPanel({
       ? {
           translation: draftTranslation.trim(),
           grammarSummary: draftGrammarSummary.trim(),
+          register: draftRegister.trim(),
           tone: draftTone.trim(),
           politeness: draftPoliteness.trim(),
           impliedMeaning: optionalText(draftImpliedMeaning),
@@ -716,9 +719,16 @@ function SegmentAnalysisPanel({
                   value={draftGrammarSummary}
                 />
               </label>
+              <label>
+                语气与礼貌（合并，标准档）
+                <input
+                  onChange={(event) => setDraftRegister(event.target.value)}
+                  value={draftRegister}
+                />
+              </label>
               <div className="segment-editor-grid">
                 <label>
-                  语气 / 态度
+                  语气 / 态度（完整档）
                   <input
                     onChange={(event) => setDraftTone(event.target.value)}
                     required
@@ -726,7 +736,7 @@ function SegmentAnalysisPanel({
                   />
                 </label>
                 <label>
-                  礼貌程度
+                  礼貌程度（完整档）
                   <input
                     onChange={(event) => setDraftPoliteness(event.target.value)}
                     required
@@ -774,10 +784,16 @@ function SegmentAnalysisPanel({
       ) : displayedAnalysis ? (
         <>
           <p className="analysis-translation">{displayedAnalysis.translation ?? "（未提供译文）"}</p>
-          <div className="analysis-tags">
-            <span>{displayedAnalysis.tone ?? "（未提供）"}</span>
-            <span>{displayedAnalysis.politeness ?? "（未提供）"}</span>
-          </div>
+          {displayedAnalysis.register ? (
+            <div className="analysis-tags">
+              <span>{displayedAnalysis.register}</span>
+            </div>
+          ) : (
+            <div className="analysis-tags">
+              <span>{displayedAnalysis.tone ?? "（未提供）"}</span>
+              <span>{displayedAnalysis.politeness ?? "（未提供）"}</span>
+            </div>
+          )}
           <div className="analysis-block">
             <strong>语法与结构</strong>
             <p>{displayedAnalysis.grammarSummary ?? "（未提供）"}</p>

@@ -9,7 +9,8 @@ import type {
   AnalysisMode,
   AnalysisPreview,
   AnalysisProgress,
-  DocumentSummary
+  DocumentSummary,
+  SegmentFieldProfile
 } from "@nihongonote/core";
 
 import {
@@ -41,6 +42,32 @@ const modeOptions: Array<{ value: AnalysisMode; label: string; description: stri
     description: "只解释固定用法库命中的助词与功能词；零费用，不调用 AI。"
   }
 ];
+
+/**
+ * 段级语义字段档位（设计文档 3.8，成本治理）。
+ * 档位越低，模型每段要输出与思考的内容越少；standard 为服务端默认值。
+ */
+const segmentFieldOptions: Array<{ value: SegmentFieldProfile; label: string; description: string }> = [
+  {
+    value: "minimal",
+    label: "精简",
+    description: "翻译 + 语法要点，最省 token"
+  },
+  {
+    value: "standard",
+    label: "标准",
+    description: "翻译 + 语法 + 语气/礼貌（合并）+ 不确定性，默认档"
+  },
+  {
+    value: "full",
+    label: "完整",
+    description: "语气/礼貌/潜台词/接话理由 7 字段独立输出，最全但最贵"
+  }
+];
+
+function segmentFieldLabel(profile: SegmentFieldProfile): string {
+  return segmentFieldOptions.find((option) => option.value === profile)?.label ?? profile;
+}
 
 function statusLabel(status: DocumentSummary["status"]): string {
   switch (status) {
@@ -95,6 +122,7 @@ export function AnalysisTools(): ReactElement {
   const [isLoading, setIsLoading] = useState(true);
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(new Set());
   const [mode, setMode] = useState<AnalysisMode>("full");
+  const [segmentFields, setSegmentFields] = useState<SegmentFieldProfile>("standard");
   const [preview, setPreview] = useState<AnalysisPreview | null>(null);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const [isConfirmOpen, setIsConfirmOpen] = useState(false);
@@ -161,7 +189,7 @@ export function AnalysisTools(): ReactElement {
     setIsPreviewLoading(true);
     setError(null);
     try {
-      setPreview(await previewAnalysis([...selectedIds]));
+      setPreview(await previewAnalysis([...selectedIds], segmentFields));
     } catch (reason: unknown) {
       setError(reason instanceof Error ? reason.message : "预览失败");
     } finally {
@@ -169,11 +197,31 @@ export function AnalysisTools(): ReactElement {
     }
   }
 
+  /** 切换段级字段档位后立即按新档位重新预览（预览本身零 LLM 调用，无费用）。 */
+  function handleSegmentFieldsChange(next: SegmentFieldProfile): void {
+    setSegmentFields(next);
+    setPreview(null);
+    if (selectedIds.size === 0) {
+      return;
+    }
+    void (async () => {
+      setIsPreviewLoading(true);
+      setError(null);
+      try {
+        setPreview(await previewAnalysis([...selectedIds], next));
+      } catch (reason: unknown) {
+        setError(reason instanceof Error ? reason.message : "预览失败");
+      } finally {
+        setIsPreviewLoading(false);
+      }
+    })();
+  }
+
   async function handleRunBatch(): Promise<void> {
     setIsStarting(true);
     setError(null);
     try {
-      const response = await startBatchAnalysis([...selectedIds], mode);
+      const response = await startBatchAnalysis([...selectedIds], mode, segmentFields);
       const next = new Map(progressById);
       for (const progress of response.started) {
         next.set(progress.documentId, {
@@ -345,6 +393,32 @@ export function AnalysisTools(): ReactElement {
             </label>
           ))}
         </div>
+        {mode === "full" ? (
+          <>
+            <p className="reader-note tools-subheading">
+              段级字段档位（完整分析生效）：档位越低，每段输出与思考越少、费用越低。
+            </p>
+            <div className="tools-mode-options">
+              {segmentFieldOptions.map((option) => (
+                <label
+                  className={`tools-mode-option is-inline ${segmentFields === option.value ? "is-selected" : ""}`}
+                  key={option.value}
+                >
+                  <input
+                    checked={segmentFields === option.value}
+                    name="segment-fields"
+                    onChange={() => handleSegmentFieldsChange(option.value)}
+                    type="radio"
+                  />
+                  <span>
+                    <strong>{option.label}</strong>
+                    <small>{option.description}</small>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </>
+        ) : null}
       </div>
 
       <div className="tools-section">
@@ -385,9 +459,15 @@ export function AnalysisTools(): ReactElement {
                     ? `${formatCost(totals.estimatedCost.offPeak ?? 0)} / ${formatCost(
                         totals.estimatedCost.peak ?? 0
                       )}`
-                    : "价格未知"}
+                    : preview.provider.isLocal
+                      ? "本地免费"
+                      : "价格未知"}
                 </strong>
-                <small>闲时 / 高峰两档单价估算</small>
+                <small>
+                  {preview.provider.isLocal
+                    ? "本地模型，零 API 费用"
+                    : "闲时 / 高峰两档单价估算"}
+                </small>
               </div>
               <div className="tools-stat">
                 <span>预计时长</span>
@@ -536,13 +616,22 @@ export function AnalysisTools(): ReactElement {
                 </dd>
               </div>
               <div>
+                <dt>段级字段档位</dt>
+                <dd>
+                  {segmentFieldLabel(segmentFields)}
+                  {mode === "full" ? "" : "（仅词典分析不涉及）"}
+                </dd>
+              </div>
+              <div>
                 <dt>预计费用</dt>
                 <dd>
                   {totals?.estimatedCost
                     ? `闲时 ${formatCost(totals.estimatedCost.offPeak ?? 0)} / 高峰 ${formatCost(
                         totals.estimatedCost.peak ?? 0
                       )}`
-                    : "该模型暂无内置价格表（费用未知）"}
+                    : preview?.provider.isLocal
+                      ? "本地模型（零 API 费用）"
+                      : "该模型暂无内置价格表（费用未知）"}
                 </dd>
               </div>
               <div>

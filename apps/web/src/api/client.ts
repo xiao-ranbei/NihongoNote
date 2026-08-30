@@ -6,6 +6,7 @@ import {
   type AnalysisMode,
   type AnalysisPreview,
   type ContentType,
+  type SegmentFieldProfile,
   documentDetailSchema,
   documentSummarySchema,
   healthResponseSchema,
@@ -226,13 +227,16 @@ export function updateSegmentAnalysis(
 /**
  * 分析工具页：策略/费用预览（纯本地统计，零 LLM 调用，不产生任何费用）。
  */
-export function previewAnalysis(documentIds: string[]): Promise<AnalysisPreview> {
+export function previewAnalysis(
+  documentIds: string[],
+  segmentFields?: SegmentFieldProfile
+): Promise<AnalysisPreview> {
   return request(
     "/api/analysis/preview",
     {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ documentIds })
+      body: JSON.stringify({ documentIds, ...(segmentFields ? { segmentFields } : {}) })
     },
     (payload) => analysisPreviewSchema.parse(payload)
   );
@@ -244,14 +248,15 @@ export function previewAnalysis(documentIds: string[]): Promise<AnalysisPreview>
  */
 export function startBatchAnalysis(
   documentIds: string[],
-  mode: AnalysisMode
+  mode: AnalysisMode,
+  segmentFields?: SegmentFieldProfile
 ): Promise<BatchAnalysisStartResponse> {
   return request(
     "/api/analysis/start",
     {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ documentIds, mode })
+      body: JSON.stringify({ documentIds, mode, ...(segmentFields ? { segmentFields } : {}) })
     },
     (payload) => batchAnalysisStartResponseSchema.parse(payload)
   );

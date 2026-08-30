@@ -9,7 +9,7 @@ import OpenAI, {
 } from "openai";
 import { z } from "zod";
 
-import { segmentAnalysisSchema, type Segment } from "@nihongonote/core";
+import { segmentAnalysisSchema, type Segment, type SegmentFieldProfile } from "@nihongonote/core";
 
 import {
   estimateCompletionTokens,
@@ -78,23 +78,71 @@ function maskApiKey(apiKey: string): string {
   return `${apiKey.slice(0, 4)}…${apiKey.slice(-4)}`;
 }
 
-const systemPrompt = `You are NihongoNote, a careful Japanese language tutor.
+/**
+ * 段级语义字段档位 → prompt 字段要求（设计文档 3.8，成本治理）。
+ *
+ * - full：全部 7 字段强制输出（历史行为）；
+ * - standard（默认）：translation + grammarSummary + register（语气/礼貌合并）+ uncertaintyNote，
+ *   可选字段「键级省略」——无值时不输出键，模型不必为写 null 而思考；
+ * - minimal：仅 translation + grammarSummary，不输出任何其他段级字段。
+ *
+ * 档位只改变「要求模型输出什么」。schema 校验保持宽松（缺失字段 default(null) 降级），
+ * 存储与 UI 完全兼容，不需要数据迁移；三个档位共用同一段 token 说明。
+ */
+export function buildSystemPrompt(profile: SegmentFieldProfile): string {
+  const fieldLines: string[] = [];
+  let fieldRules = "";
+
+  switch (profile) {
+    case "full":
+      fieldLines.push(
+        "- translation: a natural Chinese translation",
+        "- grammarSummary: the important grammar and sentence structure",
+        "- tone: the speaker's communicative attitude and strength",
+        "- politeness: the politeness/register level and evidence",
+        "- impliedMeaning: implicit meaning or null when there is none or it cannot be determined",
+        "- replyReason: why this reply follows the surrounding dialogue, or null when there is no dialogue context",
+        "- uncertaintyNote: a clear uncertainty note or null"
+      );
+      fieldRules = [
+        "Each analysis must contain all of the following top-level fields and none may be omitted:",
+        ...fieldLines,
+        "Omitting any top-level field — including politeness, tone, grammarSummary or translation — invalidates",
+        "that analysis, so emit every one of them for every segment."
+      ].join("\n");
+      break;
+    case "standard":
+      fieldLines.push(
+        "- translation: a natural Chinese translation",
+        "- grammarSummary: the important grammar and sentence structure",
+        "- register: the speaker's tone (communicative attitude and strength) and politeness level combined into one short phrase, citing evidence when notable",
+        "- uncertaintyNote: a clear uncertainty note when there is one"
+      );
+      fieldRules = [
+        "Each analysis must contain these top-level fields:",
+        ...fieldLines,
+        "register and uncertaintyNote are optional: when there is nothing meaningful to say, omit the key entirely rather than writing null."
+      ].join("\n");
+      break;
+    case "minimal":
+      fieldLines.push(
+        "- translation: a natural Chinese translation",
+        "- grammarSummary: the important grammar and sentence structure"
+      );
+      fieldRules = [
+        "Each analysis must contain exactly these top-level fields and no others:",
+        ...fieldLines
+      ].join("\n");
+      break;
+  }
+
+  return `You are NihongoNote, a careful Japanese language tutor.
 Analyze the supplied Japanese sentence or dialogue segment for a Chinese-speaking learner.
 Return JSON only. The JSON must have exactly one top-level key named "analyses", whose value is an array.
 For every supplied segment, return exactly one analysis with the same segmentId.
 
-Each analysis must contain all of the following top-level fields and none may be omitted:
-- segmentId
-- translation: a natural Chinese translation
-- grammarSummary: the important grammar and sentence structure
-- tone: the speaker's communicative attitude and strength
-- politeness: the politeness/register level and evidence
-- impliedMeaning: implicit meaning or null when there is none or it cannot be determined
-- replyReason: why this reply follows the surrounding dialogue, or null when there is no dialogue context
-- uncertaintyNote: a clear uncertainty note or null
+${fieldRules}
 - tokens: one entry for every boundary listed under that segment's tokenBoundaries
-Omitting any top-level field — including politeness, tone, grammarSummary or translation — invalidates
-that analysis, so emit every one of them for every segment.
 
 Each token must contain all of the following fields and none may be omitted: tokenId, startOffset,
 endOffset, surface, category, lemma, reading, partOfSpeech, conjugation, gloss, particleFunction,
@@ -122,6 +170,7 @@ contentType is the user's selected document type. Treat it as authoritative; do 
 targetLevel controls explanation wording only. It must never change token boundaries, lexical facts, or grammar facts.
 Example JSON shape: {"analyses":[{"segmentId":"...","translation":"...","grammarSummary":"...","tone":"...","politeness":"...","impliedMeaning":null,"replyReason":null,"uncertaintyNote":null,"tokens":[]}]}
 Return raw JSON only: no Markdown fences, no prose before or after the JSON.`;
+}
 
 /**
  * 给估算结果留的放大系数。
@@ -288,8 +337,12 @@ function schemaIssueMessage(error: z.ZodError): string {
     : "LLM analysis did not match the schema";
 }
 
-function sanitizedErrorMessage(error: unknown, apiKey: string): string {
+function sanitizedErrorMessage(error: unknown, apiKey: string | undefined): string {
   const message = error instanceof Error ? error.message : "unknown request error";
+  // Ollama 等本地 provider 没有 API key，无需脱敏
+  if (!apiKey) {
+    return message;
+  }
   return message
     .replaceAll(apiKey, "[REDACTED]")
     .replace(/Authorization:\s*\S+/giu, "Authorization: [REDACTED]")
@@ -302,14 +355,16 @@ function requestPayload(
   temperature: number,
   maxTokens: number,
   thinkingType: OpenAiCompatibleProviderConfig["thinkingType"],
-  reasoningEffort: OpenAiCompatibleProviderConfig["reasoningEffort"]
+  reasoningEffort: OpenAiCompatibleProviderConfig["reasoningEffort"],
+  segmentFields: SegmentFieldProfile,
+  isOllama: boolean
 ): DeepSeekChatCompletionParams {
   return {
     model,
     messages: [
       {
         role: "system",
-        content: systemPrompt
+        content: buildSystemPrompt(segmentFields)
       },
       {
         role: "user",
@@ -328,9 +383,9 @@ function requestPayload(
       }
     ],
     max_tokens: maxTokens,
-    response_format: {
-      type: "json_object"
-    },
+    // Ollama 的 /v1 兼容层对 response_format（JSON 模式）支持不稳定（模型/版本相关），
+    // 本地模型靠 prompt 的 "Return raw JSON only" 约束；云端（DeepSeek/OpenAI）继续走 JSON 模式。
+    ...(isOllama ? {} : { response_format: { type: "json_object" } }),
     ...(thinkingType ? { thinking: { type: thinkingType } } : {}),
     ...(thinkingType !== "disabled" && reasoningEffort
       ? { reasoning_effort: reasoningEffort }
@@ -351,6 +406,7 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
 
   private readonly client: OpenAI | undefined;
   private readonly apiKey: string | undefined;
+  private readonly isOllama: boolean;
   private readonly temperature: number;
   private readonly maxTokens: number;
   private readonly timeoutMs: number;
@@ -361,7 +417,9 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
 
   public constructor(private readonly config: OpenAiCompatibleProviderConfig) {
     this.model = config.model;
-    this.configured = config.apiKey !== undefined;
+    // Ollama 等本地 provider 无 API key 概念：没配 key 也算配置完成（localhost 免鉴权）。
+    this.isOllama = config.providerName === "ollama";
+    this.configured = this.isOllama || config.apiKey !== undefined;
     this.apiKey = config.apiKey;
     this.temperature = config.temperature;
     this.maxTokens = config.maxTokens;
@@ -370,14 +428,17 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
     this.reasoningEffort = config.reasoningEffort;
     this.debugLogging = config.debugLogging;
     this.debugLogFile = config.debugLogFile;
-    this.client = config.apiKey
-      ? new OpenAI({
-          apiKey: config.apiKey,
+    // 云端 provider 缺 key 时不构造 client（analyze 会明确报配置错误）；
+    // Ollama 用占位 key 构造（OpenAI SDK 只要求非空字符串，Ollama 忽略 Authorization header）。
+    const needsKey = !this.isOllama;
+    this.client = needsKey && !config.apiKey
+      ? undefined
+      : new OpenAI({
+          apiKey: config.apiKey ?? "ollama",
           baseURL: config.baseUrl,
           maxRetries: 0,
           timeout: config.timeoutMs
-        })
-      : undefined;
+        });
   }
 
   public get name(): string {
@@ -403,7 +464,7 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
   }
 
   public async analyze(request: AnalysisRequest): Promise<LlmAnalysisResult> {
-    if (!this.apiKey || !this.client) {
+    if (!this.client) {
       throw new ProviderConfigurationError(
         `LLM provider "${this.name}" requires LLM_API_KEY before analysis can start`
       );
@@ -415,13 +476,16 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
     const signal = AbortSignal.any([request.signal, timeoutSignal]);
     const requestId = randomUUID();
     const maxTokens = this.resolveMaxTokens(request.segments);
+    const segmentFields = request.segmentFields ?? "standard";
     const requestBody = requestPayload(
       request,
       this.model,
       this.temperature,
       maxTokens,
       this.thinkingType,
-      this.reasoningEffort
+      this.reasoningEffort,
+      segmentFields,
+      this.isOllama
     );
     const startedAt = Date.now();
     writeDebugLog(
@@ -615,6 +679,10 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
   }
 
   public async fetchBalance(): Promise<LlmBalance | null> {
+    // Ollama 等本地 provider：没有 /user/balance 端点，也没有余额概念（返回 null，前端显示不可用）
+    if (this.isOllama) {
+      return null;
+    }
     if (!this.apiKey) {
       return null;
     }
