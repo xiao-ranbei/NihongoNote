@@ -147,16 +147,27 @@ export class AnalysisService {
 
   public constructor(
     private readonly repository: DocumentRepository,
-    private readonly provider: LlmProvider,
+    /**
+     * 可变 provider 容器（设计文档 llm-settings-design.md §4）：
+     * 设置页保存后热切换 provider，这里每次分析批次开始取 current，
+     * 进行中的批次在下一个 batch 循环自然读到新 provider。
+     */
+    private readonly providerHolder: { current: LlmProvider },
     private readonly promptVersion: string,
     private readonly batchSize = 3,
     private readonly batchConcurrency = 2,
     /**
      * 段级语义字段档位默认值（config.LLM_SEGMENT_FIELDS）。
      * 工具页请求显式传档位时覆盖它；预览估算与实际分析必须用同一档位。
+     * 设置页保存档位后经 updateSegmentFields 热更新。
      */
-    private readonly defaultSegmentFields: SegmentFieldProfile = "standard"
+    private defaultSegmentFields: SegmentFieldProfile = "standard"
   ) {}
+
+  /** 设置页保存档位后调用：立即作用于后续分析（LLM-011 不回溯历史）。 */
+  public updateSegmentFields(profile: SegmentFieldProfile): void {
+    this.defaultSegmentFields = profile;
+  }
 
   /**
    * 进度 + 用量 + 费用。
@@ -290,7 +301,7 @@ export class AnalysisService {
       }
       const stats = await countSegmentTokens(document.segments);
       const estimate = estimateAnalysisTokens(document.segments.length, stats.unmissedTokens, segmentFields);
-      const estimatedCost = estimatePreviewCost(this.provider.model, estimate);
+      const estimatedCost = estimatePreviewCost(this.providerHolder.current.model, estimate);
       documents.push({
         documentId: document.id,
         title: document.title,
@@ -316,7 +327,7 @@ export class AnalysisService {
       ? totals.matchedTokens / totals.totalTokens
       : 0;
     totals.estimatedCost = estimatePreviewCost(
-      this.provider.model,
+      this.providerHolder.current.model,
       {
         inputTokens: totals.estimatedInputTokens,
         outputTokens: totals.estimatedOutputTokens,
@@ -328,10 +339,10 @@ export class AnalysisService {
       dictionaryVersion: getDictionaryVersion(),
       dictionaryStats: getDictionaryStats(),
       provider: {
-        configured: this.provider.configured,
-        model: this.provider.model,
+        configured: this.providerHolder.current.configured,
+        model: this.providerHolder.current.model,
         // Ollama 等本地模型无 API 费用，前端据此显示「本地免费」而非「价格未知」
-        isLocal: this.provider.name === "ollama"
+        isLocal: this.providerHolder.current.name === "ollama"
       },
       documents,
       totals
@@ -416,7 +427,7 @@ export class AnalysisService {
     // 逐段的 schema 校验失败不在此列（那是模型对单段的系统性偏差，重试无益）。
     for (let attempt = 0; ; attempt += 1) {
       try {
-        result = await this.provider.analyze({
+        result = await this.providerHolder.current.analyze({
           segments: batch,
           // ③ LLM 解释层：只处理未命中 token（设计文档 3.1）——
           //    词典命中 token 不进 AI batch，从源头省 token。
@@ -505,8 +516,8 @@ export class AnalysisService {
         this.repository.saveSegmentAnalysis(
           segment.id,
           merged,
-          this.provider.name,
-          this.provider.model,
+          this.providerHolder.current.name,
+          this.providerHolder.current.model,
           this.promptVersion,
           result.usage
         );
@@ -539,7 +550,7 @@ export class AnalysisService {
          * 而一味调小 batch_size 又让短句段多花请求。batchSize 退化为"最多几段"。
          */
         const tokenBudget = Math.floor(
-          this.provider.completionTokenBudget * packingSafetyRatio
+          this.providerHolder.current.completionTokenBudget * packingSafetyRatio
         );
         const batches = planBatches(queued, this.batchSize, tokenBudget)
           .slice(0, this.batchConcurrency)

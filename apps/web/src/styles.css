@@ -2161,3 +2161,133 @@ h2 {
   justify-content: flex-end;
   margin-top: 0.2rem;
 }
+
+/* ============================================================
+   LLM 设置页（llm-settings-design.md，settings.tsx）
+   本地 / 云端切换 + 保存即热切换 + 成本显性
+   ============================================================ */
+
+.settings-notice {
+  background: var(--status-ok-bg);
+  border: 1px solid var(--line-accent);
+  border-radius: 12px;
+  color: var(--status-ok);
+  font-size: 0.88rem;
+  padding: 12px 15px;
+}
+
+.settings-provider-status {
+  align-items: center;
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  display: flex;
+  gap: 0.8rem;
+  justify-content: space-between;
+  padding: 0.9rem 1.1rem;
+}
+.settings-provider-status > div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+.settings-provider-status > div > span:first-child {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+.settings-provider-status strong {
+  color: var(--ink-strong);
+  font-size: 0.95rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-provider-state {
+  border-radius: 999px;
+  flex: none;
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 0.25rem 0.7rem;
+}
+.settings-provider-state.is-ready {
+  background: var(--status-ok-bg);
+  color: var(--status-ok);
+}
+.settings-provider-state.is-missing {
+  background: var(--status-fail-bg);
+  color: var(--status-fail);
+}
+
+.settings-section {
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  padding: 1rem 1.1rem;
+}
+.settings-section h3 {
+  color: var(--ink-strong);
+  font-size: 0.95rem;
+  margin: 0;
+}
+
+.settings-grid {
+  display: grid;
+  gap: 0.9rem;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-width: 0;
+}
+.settings-field > span {
+  color: var(--text-label);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+.settings-field input,
+.settings-field select {
+  background: var(--panel-soft);
+  border: 1px solid var(--line-mid);
+  border-radius: 10px;
+  color: var(--ink-strong);
+  font: inherit;
+  font-size: 0.88rem;
+  outline: none;
+  padding: 10px 12px;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+.settings-field input:focus,
+.settings-field select:focus {
+  border-color: var(--accent-bright);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.settings-skip-note {
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin: 0.3rem 0 0;
+}
+
+.settings-subheading {
+  color: var(--text-label);
+  font-size: 0.78rem;
+  font-weight: 700;
+  margin-top: 0.4rem;
+}
+
+.settings-save-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+}

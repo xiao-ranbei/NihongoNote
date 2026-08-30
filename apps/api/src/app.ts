@@ -30,7 +30,12 @@ export async function createApp(config: AppConfig): Promise<FastifyInstance> {
   registerHealthRoutes(app, database);
   registerDocumentRoutes(app, repository, analysisService);
   registerAnalysisRoutes(app, analysisService, providers.llm);
-  registerLlmRoutes(app, providers.llm);
+  registerLlmRoutes(app, {
+    providerHolder: providers.llm,
+    config,
+    database,
+    analysisService
+  });
 
   app.addHook("onClose", async () => {
     await analysisService.close();

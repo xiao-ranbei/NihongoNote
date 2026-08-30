@@ -70,6 +70,12 @@ export const databaseSchema = `
     created_at TEXT NOT NULL
   );
 
+  -- 应用设置（key-value，JSON 存 value）：当前存 llm 键（设计文档 llm-settings-design.md）
+  CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY NOT NULL,
+    value TEXT NOT NULL
+  );
+
   CREATE INDEX IF NOT EXISTS idx_documents_updated_at
     ON documents (updated_at DESC);
   CREATE INDEX IF NOT EXISTS idx_segments_document_index

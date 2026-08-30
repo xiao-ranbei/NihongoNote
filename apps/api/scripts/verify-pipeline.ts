@@ -53,7 +53,21 @@ import {
 import { prepareSegmentTokens } from "../src/segment-preparation.js";
 import { DocumentRepository } from "../src/repositories/document-repository.js";
 import { OllamaProvider } from "../src/providers/ollama.js";
+import {
+  buildLlmProvider,
+  createProviderRegistry,
+  type LlmBuildConfig
+} from "../src/providers/registry.js";
 import type { LlmAnalysisResult, LlmProvider } from "../src/providers/types.js";
+import {
+  maskApiKey,
+  mergeLlmSettings,
+  parseLlmSettings,
+  resolveApiKey,
+  type LlmSettings,
+  type LlmSettingsInput
+} from "../src/settings.js";
+import type { AppConfig } from "../src/config.js";
 import { createDatabase } from "../src/db/database.js";
 import { escapeControlCharacters } from "../src/providers/openai-compatible.js";
 import {
@@ -796,7 +810,7 @@ const threeLayerDoc = threeLayerRepo.create({
   sourceText: "これは私の本です。",
   targetLevel: "auto"
 });
-const threeLayerService = new AnalysisService(threeLayerRepo, mockProvider, "v-test");
+const threeLayerService = new AnalysisService(threeLayerRepo, { current: mockProvider }, "v-test");
 threeLayerService.start(threeLayerDoc.id);
 
 let threeLayerProgress;
@@ -999,7 +1013,7 @@ const toolsDoc = toolsRepo.create({
   sourceText: "これは私の本です。",
   targetLevel: "auto"
 });
-const toolsService = new AnalysisService(toolsRepo, mockProvider, "v-test");
+const toolsService = new AnalysisService(toolsRepo, { current: mockProvider }, "v-test");
 const dictOnlyProgress = await toolsService.startDictionaryOnly(toolsDoc.id);
 const dictOnlyRows = toolsDb.all<{ result_json: string; usage_json: string | null; provider: string; model: string }>(
   "SELECT result_json, usage_json, provider, model FROM segment_analyses"
@@ -1112,6 +1126,137 @@ check("Ollama：配置上限再高也不超过 8192（防 OOM 兜底）", () => 
   });
   assert.equal(huge.completionTokenBudget, 8_192, "100K 配置也必须压到 8K");
   return "min(100000, 8192)=8192";
+});
+
+console.log("=== LLM 设置：合并 / 脱敏 / 热切换（零网络请求）===");
+// 设计文档 llm-settings-design.md：db 覆盖 .env、apiKey 脱敏回传与保留、
+// holder 热切换（保存即生效、无需重启）。AnalysisService 经 holder 读 provider
+// 的路径由上方 threeLayer/tools 断言覆盖（构造参数已改为 { current: mockProvider }）。
+const settingsDefaults: LlmSettings = {
+  provider: "deepseek",
+  baseUrl: "https://api.deepseek.com",
+  apiKey: "sk-env-secret",
+  model: "deepseek-chat",
+  temperature: 0.2,
+  maxTokens: 12_000,
+  segmentFields: "standard",
+  thinkingType: "enabled",
+  reasoningEffort: "minimal"
+};
+
+check("设置：merge 时 db 覆盖 env，未覆盖字段保持 env", () => {
+  const merged = mergeLlmSettings(settingsDefaults, {
+    provider: "ollama",
+    model: "qwen3.5:9b"
+  });
+  assert.equal(merged.provider, "ollama", "db 的 provider 应覆盖 env");
+  assert.equal(merged.model, "qwen3.5:9b", "db 的 model 应覆盖 env");
+  assert.equal(merged.baseUrl, "https://api.deepseek.com", "未覆盖字段应保持 env 值");
+  assert.equal(merged.apiKey, "sk-env-secret", "apiKey 未覆盖时应保持 env 值");
+  assert.equal(merged.segmentFields, "standard", "档位未覆盖时应保持 env 值");
+  return "provider/model 来自 db；baseUrl/apiKey/档位来自 env";
+});
+
+check("设置：apiKey 脱敏为「前 6 位…后 4 位」格式", () => {
+  assert.equal(maskApiKey("sk-49af12345678be98"), "sk-49a…be98");
+  assert.equal(maskApiKey("short"), "short", "过短 key 应原样返回（不暴露位数差异）");
+  assert.equal(maskApiKey(null), null);
+  assert.equal(maskApiKey(""), "", "空串原样返回，保持「空 = 无 key」语义");
+  return "sk-49a…be98 / 短 key 原样 / 空与 null 保持";
+});
+
+check("设置：apiKey 空 / masked 值视为未修改，保留库中原值", () => {
+  const stored: Partial<LlmSettings> = { apiKey: "sk-49af12345678be98" };
+  const keptByEmpty = resolveApiKey({ apiKey: "" } as LlmSettingsInput, stored);
+  assert.equal(keptByEmpty, "sk-49af12345678be98", "空值应保留原 key");
+  const keptByMasked = resolveApiKey({ apiKey: "sk-49a…be98" } as LlmSettingsInput, stored);
+  assert.equal(keptByMasked, "sk-49af12345678be98", "回传 masked 值应保留原 key");
+  const replaced = resolveApiKey({ apiKey: "sk-new-key" } as LlmSettingsInput, stored);
+  assert.equal(replaced, "sk-new-key", "新 key 应直接采用");
+  return "空 → 保留；masked → 保留；新值 → 替换";
+});
+
+check("设置：parse 校验口径与 config 一致（temperature/maxTokens 边界）", () => {
+  const valid = parseLlmSettings({
+    provider: "ollama",
+    baseUrl: "http://127.0.0.1:11434",
+    model: "qwen3.5:9b",
+    temperature: 0.2,
+    maxTokens: 12_000,
+    segmentFields: "standard"
+  });
+  assert.equal(valid.provider, "ollama", "合法输入应通过（thinkingType 等可省略）");
+  assert.equal(valid.segmentFields, "standard", "缺省档位应为 standard");
+  assert.throws(
+    () => parseLlmSettings({ ...valid, temperature: 3 }),
+    "temperature 超过 2 应被拒绝"
+  );
+  assert.throws(
+    () => parseLlmSettings({ ...valid, maxTokens: 0 }),
+    "maxTokens 小于 1 应被拒绝"
+  );
+  return "合法输入通过；越界值被拒绝";
+});
+
+// 热切换：走真实的 createProviderRegistry holder，replace 后 current 立即变化。
+const registryConfig = {
+  llmProvider: "deepseek",
+  llmProtocol: "openai",
+  llmBaseUrl: "https://api.deepseek.com",
+  llmApiKey: "sk-test",
+  llmModel: "deepseek-chat",
+  llmTemperature: 0.2,
+  llmMaxTokens: 12_000,
+  llmTimeoutMs: 300_000,
+  llmThinkingType: "enabled",
+  llmReasoningEffort: "minimal",
+  llmDebugLogging: false,
+  llmDebugLogFile: "",
+  ttsProvider: "disabled"
+} as unknown as AppConfig;
+const settingsRegistry = createProviderRegistry(registryConfig);
+
+check("设置：holder 热切换后 current 立即指向新 provider", () => {
+  const before = settingsRegistry.llm.current;
+  assert.equal(before.name, "deepseek", "初始 provider 应来自构造配置");
+  settingsRegistry.llm.replace(buildLlmProvider({
+    llmProvider: "ollama",
+    llmProtocol: "openai",
+    llmBaseUrl: "http://127.0.0.1:11434",
+    llmApiKey: undefined,
+    llmModel: "qwen3.5:9b",
+    llmTemperature: 0.2,
+    llmMaxTokens: 12_000,
+    llmTimeoutMs: 300_000,
+    llmThinkingType: undefined,
+    llmReasoningEffort: "minimal",
+    llmDebugLogging: false,
+    llmDebugLogFile: ""
+  }));
+  const after = settingsRegistry.llm.current;
+  assert.equal(after.name, "ollama", "replace 后 current 应指向新实例");
+  assert.notEqual(after, before, "current 必须是新对象，旧引用不受影响");
+  assert.equal(before.configured, true, "旧引用仍可继续使用（进行中的请求不受打断）");
+  return "deepseek → ollama；旧引用存活";
+});
+
+check("设置：buildLlmProvider 分支（disabled / 未知 provider）", () => {
+  const disabled = buildLlmProvider({
+    ...(registryConfig as LlmBuildConfig),
+    llmProvider: "disabled",
+    llmApiKey: undefined
+  });
+  assert.equal(disabled.configured, false, "disabled 应构造为未配置实例");
+  assert.equal(disabled.name, "disabled");
+  assert.throws(
+    () => buildLlmProvider({
+      ...(registryConfig as LlmBuildConfig),
+      llmProvider: "weird" as never
+    }),
+    /Unsupported LLM provider/,
+    "未知 provider 必须抛错，防止静默 fallback"
+  );
+  return "disabled → configured=false；weird → 抛错";
 });
 
 console.log("");

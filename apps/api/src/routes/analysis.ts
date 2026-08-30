@@ -58,7 +58,7 @@ function providerNotConfigured(reply: {
 export function registerAnalysisRoutes(
   app: FastifyInstance,
   service: AnalysisService,
-  provider: LlmProvider
+  providerHolder: { current: LlmProvider }
 ): void {
   app.post<{ Params: DocumentParams }>("/api/documents/:documentId/analyze", async (request, reply) => {
     const params = documentParamsSchema.safeParse(request.params);
@@ -69,7 +69,7 @@ export function registerAnalysisRoutes(
     if (!body.success) {
       return invalidInput(reply, body.error.flatten());
     }
-    if (!provider.configured) {
+    if (!providerHolder.current.configured) {
       return providerNotConfigured(reply);
     }
 
@@ -130,7 +130,7 @@ export function registerAnalysisRoutes(
     if (!body.success) {
       return invalidInput(reply, body.error.flatten());
     }
-    if (!provider.configured) {
+    if (!providerHolder.current.configured) {
       return providerNotConfigured(reply);
     }
 
@@ -164,7 +164,7 @@ export function registerAnalysisRoutes(
       return invalidInput(reply, body.error.flatten());
     }
     const { documentIds, mode, segmentFields } = body.data;
-    if (mode === "full" && !provider.configured) {
+    if (mode === "full" && !providerHolder.current.configured) {
       return providerNotConfigured(reply);
     }
 

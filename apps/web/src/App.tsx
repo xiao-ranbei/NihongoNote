@@ -35,6 +35,7 @@ import {
   type SegmentAnalysisUpdateInput
 } from "./api/client";
 import { AnalysisTools } from "./analysis-tools";
+import { SettingsPanel } from "./settings";
 import "./styles.css";
 
 const levelOptions: Array<{ value: TargetLevel; label: string }> = [
@@ -827,7 +828,7 @@ function SegmentAnalysisPanel({
 }
 
 export default function App(): ReactElement {
-  const [view, setView] = useState<"reader" | "tools">("reader");
+  const [view, setView] = useState<"reader" | "tools" | "settings">("reader");
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [documents, setDocuments] = useState<MvpDocumentSummary[]>([]);
   const [selectedDocument, setSelectedDocument] = useState<MvpDocument | null>(null);
@@ -874,7 +875,17 @@ export default function App(): ReactElement {
   }, []);
 
   // 余额查询是附加信息：未配置 provider / 查询失败都静默降级为 null（UI 显示「余额未知」），
-  // 不阻塞页面也不弹错误横幅。
+  // 不阻塞页面也不弹错误横幅。设置页保存后（provider 可能变化）会再次调用 refreshBalance。
+  function refreshBalance(): void {
+    void getLlmBalance()
+      .then((balance) => {
+        setLlmBalance(balance);
+      })
+      .catch(() => {
+        setLlmBalance(null);
+      });
+  }
+
   useEffect(() => {
     let cancelled = false;
     void getLlmBalance()
@@ -1185,11 +1196,25 @@ export default function App(): ReactElement {
         </div>
         <div className="topbar-actions">
           <button
-            className={`view-toggle ${view === "tools" ? "is-active" : ""}`}
-            onClick={() => setView(view === "reader" ? "tools" : "reader")}
+            className={`view-toggle ${view === "reader" ? "is-active" : ""}`}
+            onClick={() => setView("reader")}
             type="button"
           >
-            {view === "reader" ? "分析工具" : "返回阅读"}
+            阅读
+          </button>
+          <button
+            className={`view-toggle ${view === "tools" ? "is-active" : ""}`}
+            onClick={() => setView("tools")}
+            type="button"
+          >
+            分析工具
+          </button>
+          <button
+            className={`view-toggle ${view === "settings" ? "is-active" : ""}`}
+            onClick={() => setView("settings")}
+            type="button"
+          >
+            设置
           </button>
           <button
             aria-expanded={isLibraryOpen}
@@ -1219,8 +1244,8 @@ export default function App(): ReactElement {
         </div>
       </header>
 
-      <main className={`workspace ${view === "tools" || !isLibraryOpen ? "library-collapsed" : ""}`}>
-        {view === "tools" ? null : isLibraryOpen ? (
+      <main className={`workspace ${view !== "reader" || !isLibraryOpen ? "library-collapsed" : ""}`}>
+        {view !== "reader" ? null : isLibraryOpen ? (
           <aside className="library-panel">
             <div className="panel-heading">
               <div>
@@ -1295,6 +1320,8 @@ export default function App(): ReactElement {
         <section className="content-panel">
           {view === "tools" ? (
             <AnalysisTools />
+          ) : view === "settings" ? (
+            <SettingsPanel onSettingsSaved={refreshBalance} />
           ) : (
             <>
           {error ? <div className="error-banner">{error}</div> : null}

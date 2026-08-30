@@ -262,6 +262,71 @@ export function startBatchAnalysis(
   );
 }
 
+/* ---------------- LLM 设置（设计文档 llm-settings-design.md） ---------------- */
+
+export const llmProviderNames = [
+  "disabled",
+  "ollama",
+  "deepseek",
+  "openai",
+  "openai-compatible"
+] as const;
+export type LlmProviderName = (typeof llmProviderNames)[number];
+
+export type LlmThinkingType = "enabled" | "disabled";
+export type LlmReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
+
+/** 与后端 apps/api/src/settings.ts 的 LlmSettings 对齐。 */
+export interface LlmSettings {
+  provider: LlmProviderName;
+  baseUrl: string;
+  apiKey: string | null;
+  model: string;
+  temperature: number;
+  maxTokens: number;
+  segmentFields: SegmentFieldProfile;
+  thinkingType: LlmThinkingType | null;
+  reasoningEffort: LlmReasoningEffort | null;
+}
+
+/** PUT 请求体：apiKey 可选（空 / masked 值 = 不修改，保留库中原值）。 */
+export type LlmSettingsInput = Omit<LlmSettings, "apiKey"> & { apiKey?: string | null };
+
+/** GET/PUT 响应：生效配置（apiKey 已脱敏）+ 逐字段来源 + 当前 provider 实例信息。 */
+export interface LlmSettingsState {
+  settings: LlmSettings;
+  source: Partial<Record<keyof LlmSettings, "db" | "env">>;
+  provider: {
+    name: string;
+    configured: boolean;
+    model: string;
+    isLocal: boolean;
+  };
+}
+
+function parseLlmSettingsState(payload: unknown): LlmSettingsState {
+  if (typeof payload !== "object" || payload === null || !("settings" in payload)) {
+    throw new Error("设置返回格式不正确");
+  }
+  return payload as LlmSettingsState;
+}
+
+export function getLlmSettings(): Promise<LlmSettingsState> {
+  return request("/api/llm/settings", { method: "GET" }, parseLlmSettingsState);
+}
+
+export function saveLlmSettings(input: LlmSettingsInput): Promise<LlmSettingsState> {
+  return request(
+    "/api/llm/settings",
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input)
+    },
+    parseLlmSettingsState
+  );
+}
+
 /** 仅供工具页校验 mode 值（与 core 契约保持一致）。 */
 export { analysisModeSchema };
 export type { AnalysisMode, AnalysisPreview };

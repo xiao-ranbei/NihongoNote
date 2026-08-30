@@ -106,7 +106,7 @@
 | 项 | 方案 |
 | --- | --- |
 | 入口位置 | 侧栏/顶部「分析工具」页（与设置页同级），非正文内嵌按钮 |
-| 职责 | 设置页管全局配置（provider/模型/档位/词典开关/预算上限）；工具页只做「选文章 → 预览 → 确认 → 看进度」单一动作 |
+| 职责 | 设置页管全局配置（provider/模型/档位/词典开关/预算上限）；工具页只做「选文章 → 预览 → 确认 → 看进度」单一动作。设置页已落地为顶栏第三个视图「设置」（本地 Ollama / 云端 API 切换、保存即热切换、db 覆盖 .env，见 `llm-settings-design.md`） |
 | 功能 | ① 选择文章（支持多选批量）；② 预览词典/AI 混合策略（词典覆盖多少 token、AI 只处理哪些）；③ 费用预览（按余额与闲时/高峰估算）；④ 明确按钮「开始 AI 分析」+ **成本确认弹窗**（预计 token/费用/时长/词典覆盖，确认才发请求，落实 LLM-011） |
 | 模式 | 「完整分析」（词典 + AI）与「仅词典分析」（零费用）两种模式可选 |
 | 取消/重试 | 复用现有分析进度与取消机制，工具页展示进度 |
@@ -213,6 +213,7 @@
 5. ~~**回填沉淀**：用户在解析卡上「确认这条解释」→ 沉淀为缓存条目~~ → ❌ **已取消**（决策 2 调整）：用户回填的解释本身可能就有误，固化进缓存反而扩大错误面。改为「**离线扩充人工编辑的固定用法库**」作为「越用越省」的实现路径——每加一条人工校对条目，永久省一条 AI 解释的 token；
 6. **回归（需用户批准）**：用现有两篇样本跑词典覆盖率统计（纯本地查表可先行，不消耗 token）；AI 路径回归在用户许可后执行。
 7. **段级字段档位制 + Ollama 支持**：✅ 已完成（2026-08-30）——core 新增 `segmentFieldProfileSchema`（minimal/standard/full）与 `segmentAnalysisSchema.register`；prompt 档位化（`buildSystemPrompt`，standard 起键级省略）；`LLM_SEGMENT_FIELDS` env；预览系数按档位取值（full 3500 / standard 2200 / minimal 1500 每段）；工具页档位切换自动重算预览；**OllamaProvider 走原生 `/api/chat`**（实测兼容层 num_ctx 锁 4096 且无法关 thinking，见 3.9）+ 输出/内存预算（8K/12288）+ 进程级自动重试；真实链路冒烟（`nihongo/场景1.txt` 前 3 行、9 段）实测 **9/9 成功**、token 总数 96（对比 DeepSeek 6,622/段）、register 全有值、uncertaintyNote 键级省略生效、无服务崩溃；verify 新增档位系数 + OllamaProvider 离线断言。
+8. **LLM 设置页**：✅ 已完成（2026-08-30）——顶栏第三个视图「设置」（`docs/llm-settings-design.md`）：本地 Ollama / 云端 API（DeepSeek/OpenAI/兼容端点）/ 禁用三选一；`app_settings` 表（key="llm"）存 JSON，**db 覆盖 .env**（清空即回 env）；apiKey 明文存本机库、GET 回传 masked（前 6 后 4）、空/masked 视为未修改；provider 热切换（registry 返回可变 holder，`providerHolder.current` 每批读取，保存即生效无需重启）；`segmentFields` 档位同步热更新；verify 新增 6 条设置断言（81/81）、curl 冒烟 7 步全过（GET env 默认 → PUT db 覆盖 → preview 反映新 provider → key 保留规则 → 非法输入 400）。
 
 ---
 
@@ -226,6 +227,7 @@
 | 决策 4：句段级语义 | **仍走 AI + 词典化兜底**（句末语气模板）；提供「仅词典分析」模式 | I-18 |
 | 决策 5：段级字段档位（2026-08-30） | **档位制 + 键级省略**——minimal/standard/full 三档，默认 standard；合并 tone+politeness → register、可选字段无值不输出键；只改 prompt，schema/存储零迁移 | I-21 |
 | 决策 6：本地模型（2026-08-30） | **Ollama 支持，走原生 `/api/chat`**——实测 OpenAI 兼容层强制 num_ctx=4096 且无法关闭 qwen3.5 系 thinking，故弃用兼容层；原生协议 + `think:false` + 输出预算 8K（`min(LLM_MAX_TOKENS, 8192)`）+ `num_ctx≈12288` 内存预算（防 16GB VRAM OOM）；无 key 视为 configured、余额不可用、预览费用显示「本地免费」、不发 response_format；配套进程级自动重试一次 | — |
+| 决策 7：LLM 设置页（2026-08-30） | **顶栏第三视图「设置」+ 保存即热切换**——`app_settings` 表（db 覆盖 .env）；apiKey 明文存本机库（用户拍板），GET 回传 masked、空/masked 视为未修改；registry 改可变 holder，保存即重建 provider；`segmentFields` 档位同步热更新 | — |
 | 工具页形态（I-19） | 独立页面（倾向），实施时与设置页一并确认 | I-19 |
 
 ---

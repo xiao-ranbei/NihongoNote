@@ -377,7 +377,7 @@ async function main(): Promise<void> {
   }
 
   const providers = createProviderRegistry(appConfig);
-  if (!providers.llm.configured) {
+  if (!providers.llm.current.configured) {
     database.close();
     throw new Error("LLM 未配置，无法运行回归");
   }
