@@ -150,21 +150,28 @@
 
 ### 3.9 Ollama 本地模型支持（决策 6）
 
-**背景**：成本敏感用户可能希望零 API 费用跑本地模型（家用显卡/CPU）。现有 provider 抽象已统一走 OpenAI 兼容层，Ollama `/v1` 端点天然对齐。
+**背景**：成本敏感用户可能希望零 API 费用跑本地模型（家用显卡/CPU）。
 
-**方案**：
+**2026-08-30 实测修订**：最初计划复用 OpenAI 兼容层（`/v1/chat/completions`），实测发现两个硬限制（详见 `ollama.ts` 头注释）：
+1. 兼容层**强制 `num_ctx=4096`**——`usage.total_tokens` 卡 4096，顶层与 `options` 里的 `num_ctx` 均被忽略；prompt 占 ~2K 后只剩 ~2K 输出空间，真实分析必然截断（7000 输出对照实测验证）；
+2. 兼容层**无法关闭 qwen3.5 系 thinking**——`think:false` / `thinking:false` / `options.think` 全无效（仅 `reasoning_effort:"none"` 有效），思考会把 `max_tokens` 吃光、content 为空。
+
+**最终方案**：改走 **Ollama 原生 `/api/chat`**（专用 `OllamaProvider`，`ollama.ts`），两个问题均不存在（`options.num_ctx` 实测扩到 16K+、`think:false` 实测有效）。
 
 | 项 | 方案 |
 | --- | --- |
-| 配置 | `LLM_PROVIDER=ollama`、`LLM_BASE_URL=http://127.0.0.1:11434/v1`、`LLM_MODEL=qwen3.5:9b`（示例；实现通用，模型可换）；**无需 `LLM_API_KEY`** |
+| 配置 | `LLM_PROVIDER=ollama`、`LLM_BASE_URL=http://127.0.0.1:11434`（兼容带 `/v1` 写法，自动归一化到 `/api/chat`）、`LLM_MODEL=qwen3.5:9b`（示例；实现通用，模型可换）；**无需 `LLM_API_KEY`** |
 | configured | ollama 恒为 true（无 key 也算配置完成，localhost 免鉴权） |
-| client | 用占位 key `"ollama"` 构造 OpenAI SDK client（SDK 只要求非空字符串，Ollama 忽略 Authorization header） |
-| 余额 | `fetchBalance()` 对 ollama 直接返回 null（无 `/user/balance` 端点）→ 前端「余额未知」 |
+| 协议 | 原生 `/api/chat` 流式 NDJSON（每行一个 JSON 对象，`message.content` 累积、`done=true` 携带 `done_reason` / `prompt_eval_count` / `eval_count`）；`finish_reason="length"` 报截断错误 |
+| 输出预算 | `completionTokenBudget = min(LLM_MAX_TOKENS, 8192)`——本地模型按档位输出结构化 JSON，单批 2~4 段实际 ~3~6K tokens，8K 留安全余量；`planBatches` 按该预算装箱，超预算长句段自动单独成批（不截断） |
+| 内存预算 | `options.num_ctx = 输出预算 + 4096`（≈12288）；KV cache ≈ 590KB/token（qwen3.5 9B），12288 → ~7GB + 权重 ~6.6GB ≈ 13.6GB，16GB VRAM 内安全；此前顶到 40K（≈23GB KV）直接 OOM 崩溃（实测 2026-08-30） |
+| thinking | `think:false`（原生协议实测有效；qwen3.5 系不需要思考） |
+| 余额 | `fetchBalance()` 返回 null（无 `/user/balance` 端点）→ 前端「余额未知」 |
 | 价格 | 模型不在内置价格表 → 预览费用显示「**本地免费（零 API 费用）**」（`preview.provider.isLocal=true`），而不是误导性的「价格未知」 |
-| JSON 模式 | ollama 不发 `response_format`（Ollama 兼容层对 JSON 模式支持不稳定），靠 prompt「Return raw JSON only」约束 |
-| thinking | 非 deepseek 默认不发 thinking/reasoning_effort（config 已有逻辑），本地模型直接输出 |
+| JSON 模式 | 不发 `response_format`（Ollama JSON 模式支持不稳定），靠 prompt「Return raw JSON only」约束；prompt 进一步要求**字符串值内容内禁用 ASCII 引号**（用全角「…」），防本地模型输出损坏 JSON |
+| 自动重试 | `analysis-service` 的 `processBatch` 对 provider 整批异常**自动重试一次**（最多 2 次尝试，间隔 1s，仅在 run 仍 current 时）——本地模型 JSON 引号偶发损坏靠它兜底，免除用户手动重跑整篇 |
 
-**风险**：本地模型遵循 JSON 指令的能力决定可靠性（qwen3 系较好）；速度远慢于云端 API（时长估算按输出 token 速率已体现）；显存不足会 OOM（需用户自选合适量化档）。
+**风险**：本地模型遵循 JSON 指令的能力决定可靠性（qwen3.5 系较好，2026-08-30 冒烟实测 **9/9 成功**）；速度远慢于云端 API（qwen3.5:9b 实测 ~42 tokens/s，9 段约 7 分钟）；显存不足会 OOM（预算上限已做保护，仍需用户自选合适量化档）。
 
 ---
 
@@ -205,7 +212,7 @@
 4. **工具页**：✅ 已完成（2026-08-29）——`POST /api/analysis/preview`（纯本地统计词典覆盖 + 估算 token/闲时高峰费用/时长，零 LLM）+ `POST /api/analysis/start`（批量，full / dictionary-only 双模式）；`AnalysisService.startDictionaryOnly()`（仅词典零费用落库，瘦身 token + 段级字段 null + 来源标记 dictionary）；前端「分析工具」页（顶栏切换，多选文章 → 模式选择 → 策略/费用预览 → 成本确认弹窗 → 唯一触发按钮 → 进度轮询），落实 LLM-011/LLM-013；`prepareSegmentTokens` 独立为 `segment-preparation.ts` 供服务与预览共用（避免循环依赖）；verify 新增 8 条断言（70/70）；
 5. ~~**回填沉淀**：用户在解析卡上「确认这条解释」→ 沉淀为缓存条目~~ → ❌ **已取消**（决策 2 调整）：用户回填的解释本身可能就有误，固化进缓存反而扩大错误面。改为「**离线扩充人工编辑的固定用法库**」作为「越用越省」的实现路径——每加一条人工校对条目，永久省一条 AI 解释的 token；
 6. **回归（需用户批准）**：用现有两篇样本跑词典覆盖率统计（纯本地查表可先行，不消耗 token）；AI 路径回归在用户许可后执行。
-7. **段级字段档位制 + Ollama 支持**：✅ 已完成（2026-08-30）——core 新增 `segmentFieldProfileSchema`（minimal/standard/full）与 `segmentAnalysisSchema.register`；prompt 档位化（`buildSystemPrompt`，standard 起键级省略）；`LLM_SEGMENT_FIELDS` env；预览系数按档位取值（full 3500 / standard 2200 / minimal 1500 每段）；工具页档位切换自动重算预览；Ollama provider 放行（无 key 视为 configured、余额不可用、预览显示「本地免费」、不发 response_format）；verify 新增档位系数断言。
+7. **段级字段档位制 + Ollama 支持**：✅ 已完成（2026-08-30）——core 新增 `segmentFieldProfileSchema`（minimal/standard/full）与 `segmentAnalysisSchema.register`；prompt 档位化（`buildSystemPrompt`，standard 起键级省略）；`LLM_SEGMENT_FIELDS` env；预览系数按档位取值（full 3500 / standard 2200 / minimal 1500 每段）；工具页档位切换自动重算预览；**OllamaProvider 走原生 `/api/chat`**（实测兼容层 num_ctx 锁 4096 且无法关 thinking，见 3.9）+ 输出/内存预算（8K/12288）+ 进程级自动重试；真实链路冒烟（`nihongo/场景1.txt` 前 3 行、9 段）实测 **9/9 成功**、token 总数 96（对比 DeepSeek 6,622/段）、register 全有值、uncertaintyNote 键级省略生效、无服务崩溃；verify 新增档位系数 + OllamaProvider 离线断言。
 
 ---
 
@@ -218,7 +225,7 @@
 | 决策 3：命中 token 存储 | **瘦身存储**（只存必要字段 + source，不存宽表） | I-17 |
 | 决策 4：句段级语义 | **仍走 AI + 词典化兜底**（句末语气模板）；提供「仅词典分析」模式 | I-18 |
 | 决策 5：段级字段档位（2026-08-30） | **档位制 + 键级省略**——minimal/standard/full 三档，默认 standard；合并 tone+politeness → register、可选字段无值不输出键；只改 prompt，schema/存储零迁移 | I-21 |
-| 决策 6：本地模型（2026-08-30） | **Ollama 支持**——registry 放行 provider 名，复用 OpenAI 兼容抽象；无 key 视为 configured、余额不可用、预览费用显示「本地免费」、不发 response_format | — |
+| 决策 6：本地模型（2026-08-30） | **Ollama 支持，走原生 `/api/chat`**——实测 OpenAI 兼容层强制 num_ctx=4096 且无法关闭 qwen3.5 系 thinking，故弃用兼容层；原生协议 + `think:false` + 输出预算 8K（`min(LLM_MAX_TOKENS, 8192)`）+ `num_ctx≈12288` 内存预算（防 16GB VRAM OOM）；无 key 视为 configured、余额不可用、预览费用显示「本地免费」、不发 response_format；配套进程级自动重试一次 | — |
 | 工具页形态（I-19） | 独立页面（倾向），实施时与设置页一并确认 | I-19 |
 
 ---

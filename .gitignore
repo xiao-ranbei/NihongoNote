@@ -14,3 +14,6 @@ coverage/
 *.mp3
 
 .workbuddy/
+
+# 本地测试素材（场景1.txt 等）
+nihongo/

@@ -1,5 +1,6 @@
 import type { AppConfig } from "../config.js";
 import { DisabledLlmProvider, DisabledTtsProvider } from "./disabled.js";
+import { OllamaProvider } from "./ollama.js";
 import { OpenAiCompatibleLlmProvider } from "./openai-compatible.js";
 import type { LlmProvider, TtsProvider } from "./types.js";
 
@@ -13,13 +14,30 @@ export function createProviderRegistry(config: AppConfig): ProviderRegistry {
 
   if (config.llmProvider === "disabled") {
     llm = new DisabledLlmProvider();
+  } else if (config.llmProvider === "ollama") {
+    // Ollama 本地模型（设计文档 3.9）：走原生 /api/chat 协议。
+    // OpenAI 兼容层实测有 num_ctx=4096 硬限制且无法关闭思考（2026-08-30），
+    // 原生协议才能扩上下文 + think:false。无 API key、无余额端点。
+    if (config.llmProtocol !== "openai") {
+      throw new Error(
+        `LLM provider "${config.llmProvider}" currently supports only LLM_PROTOCOL=openai`
+      );
+    }
+
+    llm = new OllamaProvider({
+      providerName: config.llmProvider,
+      baseUrl: config.llmBaseUrl,
+      model: config.llmModel,
+      temperature: config.llmTemperature,
+      maxTokens: config.llmMaxTokens,
+      timeoutMs: config.llmTimeoutMs,
+      debugLogging: config.llmDebugLogging,
+      debugLogFile: config.llmDebugLogFile
+    });
   } else if (
     config.llmProvider === "deepseek"
     || config.llmProvider === "openai"
     || config.llmProvider === "openai-compatible"
-    // Ollama 本地模型（设计文档 3.9）：/v1 端点与 OpenAI 兼容层天然对齐，
-    // 无 API key、无余额端点，configured/balance 由 provider 内部特判。
-    || config.llmProvider === "ollama"
   ) {
     if (config.llmProtocol !== "openai") {
       throw new Error(

@@ -409,34 +409,46 @@ export class AnalysisService {
     }));
 
     let result: LlmAnalysisResult;
-    try {
-      result = await this.provider.analyze({
-        segments: batch,
-        // ③ LLM 解释层：只处理未命中 token（设计文档 3.1）——
-        //    词典命中 token 不进 AI batch，从源头省 token。
-        tokenBoundaries: prepared.map((item) => ({
-          segmentId: item.segment.id,
-          tokens: item.llmBoundaries
-        })),
-        surroundingContext: batch.map((segment) => ({
-          segmentId: segment.id,
-          context: contextFor(segment, allSegments)
-        })),
-        contentType: document.contentType,
-        targetLevel: document.targetLevel,
-        promptVersion: this.promptVersion,
-        segmentFields,
-        signal: run.controller.signal
-      });
-    } catch (reason: unknown) {
-      if (!this.isCurrent(documentId, run)) {
-        return;
+    // 本地模型（Ollama/qwen3.5 等）偶发整批 JSON 语法错误（字符串内引号混用等，
+    // 2026-08-30 实测约 1/3 批次首跑失败），云端偶发批次级错误同样存在。
+    // 免费/低成本场景自动重试一次（最多 2 次尝试），仍失败才落 failed，
+    // 避免用户为一次偶发错误手动重跑整篇。重试只针对 provider 抛异常（整批无效），
+    // 逐段的 schema 校验失败不在此列（那是模型对单段的系统性偏差，重试无益）。
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        result = await this.provider.analyze({
+          segments: batch,
+          // ③ LLM 解释层：只处理未命中 token（设计文档 3.1）——
+          //    词典命中 token 不进 AI batch，从源头省 token。
+          tokenBoundaries: prepared.map((item) => ({
+            segmentId: item.segment.id,
+            tokens: item.llmBoundaries
+          })),
+          surroundingContext: batch.map((segment) => ({
+            segmentId: segment.id,
+            context: contextFor(segment, allSegments)
+          })),
+          contentType: document.contentType,
+          targetLevel: document.targetLevel,
+          promptVersion: this.promptVersion,
+          segmentFields,
+          signal: run.controller.signal
+        });
+        break;
+      } catch (reason: unknown) {
+        if (!this.isCurrent(documentId, run) || attempt >= 1) {
+          if (!this.isCurrent(documentId, run)) {
+            return;
+          }
+          const message = errorMessage(reason);
+          for (const segment of batch) {
+            this.repository.markSegmentFailed(segment.id, message);
+          }
+          return;
+        }
+        // 短暂等待后重试一次（本地模型刚崩完一个请求，立即重试命中率更高）
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
       }
-      const message = errorMessage(reason);
-      for (const segment of batch) {
-        this.repository.markSegmentFailed(segment.id, message);
-      }
-      return;
     }
 
     if (!this.isCurrent(documentId, run)) {

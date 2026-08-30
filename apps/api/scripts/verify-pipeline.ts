@@ -52,6 +52,7 @@ import {
 } from "../src/services/analysis-service.js";
 import { prepareSegmentTokens } from "../src/segment-preparation.js";
 import { DocumentRepository } from "../src/repositories/document-repository.js";
+import { OllamaProvider } from "../src/providers/ollama.js";
 import type { LlmAnalysisResult, LlmProvider } from "../src/providers/types.js";
 import { createDatabase } from "../src/db/database.js";
 import { escapeControlCharacters } from "../src/providers/openai-compatible.js";
@@ -1056,6 +1057,61 @@ check("工具页：previewAnalysis 汇总、provider 信息与跳过缺失文章
   assert.deepEqual(toolsPreview.totals.matchedTokens, doc.matchedTokens, "totals 应等于单篇汇总");
   assert.deepEqual(toolsPreview.totals.estimatedTotalTokens, doc.estimatedTotalTokens);
   return `coverage ${Math.round(doc.dictionaryCoverage * 100)}% / 预计 ${doc.estimatedTotalTokens} tokens / 缺失文章已跳过`;
+});
+
+console.log("=== OllamaProvider：离线断言（零网络请求）===");
+// 设计文档 3.9：本地 provider 不依赖 key/余额，输出预算被压缩到 8K 上限
+// （min(LLM_MAX_TOKENS, 8192)），配合 num_ctx=预算+4096 保护 16GB VRAM 不 OOM。
+// 此处只构造实例验证公开契约，不发起任何网络调用（离线可跑）。
+const ollamaProvider = new OllamaProvider({
+  providerName: "ollama",
+  baseUrl: "http://127.0.0.1:11434/v1",
+  model: "qwen3.5:9b",
+  temperature: 0.2,
+  maxTokens: 12_000,
+  timeoutMs: 300_000,
+  debugLogging: false,
+  debugLogFile: ""
+});
+check("Ollama：configured 恒 true（localhost 免鉴权，无 key 概念）", () => {
+  assert.equal(ollamaProvider.configured, true, "本地 provider 不应要求 API key");
+  assert.equal(ollamaProvider.protocol, "openai", "协议面保持 openai 以复用调用路径");
+  assert.equal(ollamaProvider.model, "qwen3.5:9b");
+  return "configured=true / protocol=openai / model=qwen3.5:9b";
+});
+check("Ollama：输出预算压到 8K 上限（内存保护）", () => {
+  assert.equal(ollamaProvider.completionTokenBudget, 8_192, "maxTokens=12000 应被压到 8192");
+  const smallBudget = new OllamaProvider({
+    providerName: "ollama",
+    baseUrl: "http://127.0.0.1:11434",
+    model: "qwen3.5:9b",
+    temperature: 0.2,
+    maxTokens: 5_000,
+    timeoutMs: 300_000,
+    debugLogging: false,
+    debugLogFile: ""
+  });
+  assert.equal(smallBudget.completionTokenBudget, 5_000, "低于 8K 的配置应保持原值");
+  return "min(12000, 8192)=8192；min(5000, 8192)=5000";
+});
+const ollamaBalance = await ollamaProvider.fetchBalance();
+check("Ollama：fetchBalance 返回 null（无余额端点，前端显示不可用）", () => {
+  assert.equal(ollamaBalance, null, "本地 provider 不应编造余额");
+  return "balance=null";
+});
+check("Ollama：配置上限再高也不超过 8192（防 OOM 兜底）", () => {
+  const huge = new OllamaProvider({
+    providerName: "ollama",
+    baseUrl: "http://127.0.0.1:11434",
+    model: "qwen3.5:9b",
+    temperature: 0.2,
+    maxTokens: 100_000,
+    timeoutMs: 300_000,
+    debugLogging: false,
+    debugLogFile: ""
+  });
+  assert.equal(huge.completionTokenBudget, 8_192, "100K 配置也必须压到 8K");
+  return "min(100000, 8192)=8192";
 });
 
 console.log("");

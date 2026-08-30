@@ -169,7 +169,11 @@ Do not invent context. If multiple interpretations are reasonable, say so in unc
 contentType is the user's selected document type. Treat it as authoritative; do not replace it with an inferred type.
 targetLevel controls explanation wording only. It must never change token boundaries, lexical facts, or grammar facts.
 Example JSON shape: {"analyses":[{"segmentId":"...","translation":"...","grammarSummary":"...","tone":"...","politeness":"...","impliedMeaning":null,"replyReason":null,"uncertaintyNote":null,"tokens":[]}]}
-Return raw JSON only: no Markdown fences, no prose before or after the JSON.`;
+Return raw JSON only: no Markdown fences, no prose before or after the JSON.
+ASCII double quotes are used ONLY as JSON structural delimiters around keys and string values.
+Inside the text of a string value, never place an ASCII double quote: quote Japanese or Chinese
+terms with full-width marks（“…” or 「…」）. An ASCII double quote inside a string value
+terminates it and invalidates the entire JSON response.`;
 }
 
 /**
@@ -190,7 +194,7 @@ function endpointFor(baseUrl: string): string {
   return new URL("chat/completions", `${baseUrl.replace(/\/+$/u, "")}/`).toString();
 }
 
-function writeDebugLog(
+export function writeDebugLog(
   enabled: boolean,
   filePath: string,
   event: string,
@@ -267,7 +271,7 @@ export function escapeControlCharacters(text: string): string {
   return result;
 }
 
-function parseJsonResponse(responseBody: string): unknown {
+export function parseJsonResponse(responseBody: string): unknown {
   try {
     return JSON.parse(responseBody) as unknown;
   } catch (error) {
@@ -281,7 +285,7 @@ function parseJsonResponse(responseBody: string): unknown {
   }
 }
 
-function validateRequest(request: AnalysisRequest): void {
+export function validateRequest(request: AnalysisRequest): void {
   if (request.segments.length === 0) {
     throw new ProviderRequestError("Analysis request must contain at least one segment");
   }
@@ -330,14 +334,14 @@ function validateRequest(request: AnalysisRequest): void {
   }
 }
 
-function schemaIssueMessage(error: z.ZodError): string {
+export function schemaIssueMessage(error: z.ZodError): string {
   const issue = error.issues[0];
   return issue
     ? `LLM analysis did not match the schema (${issue.path.join(".")}: ${issue.message})`
     : "LLM analysis did not match the schema";
 }
 
-function sanitizedErrorMessage(error: unknown, apiKey: string | undefined): string {
+export function sanitizedErrorMessage(error: unknown, apiKey: string | undefined): string {
   const message = error instanceof Error ? error.message : "unknown request error";
   // Ollama 等本地 provider 没有 API key，无需脱敏
   if (!apiKey) {
@@ -386,11 +390,20 @@ function requestPayload(
     // Ollama 的 /v1 兼容层对 response_format（JSON 模式）支持不稳定（模型/版本相关），
     // 本地模型靠 prompt 的 "Return raw JSON only" 约束；云端（DeepSeek/OpenAI）继续走 JSON 模式。
     ...(isOllama ? {} : { response_format: { type: "json_object" } }),
-    ...(thinkingType ? { thinking: { type: thinkingType } } : {}),
-    ...(thinkingType !== "disabled" && reasoningEffort
-      ? { reasoning_effort: reasoningEffort }
-      : {}),
-    ...(thinkingType === "enabled" ? {} : { temperature }),
+    // Ollama 已改为走原生 /api/chat 协议（ollama.ts，可扩上下文+关思考），
+    // 此 isOllama 分支仅作防御性保留：OpenAI 兼容层的 response_format 对
+    // Ollama 不稳定（模型/版本相关），靠 prompt 的 "Return raw JSON only" 约束；
+    // reasoning_effort: "none" 是实测唯一能关闭 qwen3.5 系思考的参数。
+    // 云端（DeepSeek/OpenAI）保持既有 thinking / reasoning_effort 逻辑。
+    ...(isOllama
+      ? { reasoning_effort: "none" as const, temperature }
+      : {
+          ...(thinkingType ? { thinking: { type: thinkingType } } : {}),
+          ...(thinkingType !== "disabled" && reasoningEffort
+            ? { reasoning_effort: reasoningEffort }
+            : {}),
+          ...(thinkingType === "enabled" ? {} : { temperature })
+        }),
     stream: true,
     stream_options: {
       include_usage: true
