@@ -9,7 +9,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.scripts.json",
     "verify": "tsx scripts/verify-pipeline.ts",
     "regression": "tsx scripts/regression-corpus.ts",
-    "dictionary-coverage": "tsx scripts/dictionary-coverage.ts"
+    "dictionary-coverage": "tsx scripts/dictionary-coverage.ts",
+    "dictionary-gap": "tsx scripts/dictionary-gap-analysis.ts"
   },
   "dependencies": {
     "@nihongonote/core": "workspace:*",
