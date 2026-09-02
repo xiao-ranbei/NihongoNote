@@ -271,18 +271,106 @@ export function escapeControlCharacters(text: string): string {
   return result;
 }
 
+/** `"` 后面出现这些字符（或已到末尾）时，说明它是合法的结构闭合引号。 */
+const structuralFollowers = new Set([",", "}", "]", ":"]);
+
+/**
+ * 修复本地小模型的「全角闭引号退化」（2026-09-01 实测定位，见
+ * docs/analysis-failure-investigation-2026-09-01.md 根因 2）。
+ *
+ * qwen3.5:9b 在长 JSON 里**稳定**把全角闭引号 ”（U+201D）写成 ASCII "（U+0022），
+ * 例如："grammarPoint": "数量词，与“1"组成“1 つ”，表示单数或一个单位"
+ * ——开引号是全角 “，闭合却是 ASCII "，字符串在此被提前终止，整批响应无法解析。
+ * 同样输入两次运行的出错位置几乎一致（均 line 38），是确定性触发而非随机抖动，
+ * 因此 analysis-service 的「自动重试一次」救不回来（重试产出同样的错误模式）。
+ *
+ * 判据：处于字符串内部时遇到 "，跳过后续空白看下一个字符——
+ *  - 若是 JSON 结构字符（, } ] :）或已到末尾 → 合法的结构闭合引号，原样保留；
+ *  - 否则 → 字符串值内部的迷途引号，替换为全角闭引号 ”。
+ *
+ * 只在 JSON.parse 失败后调用，对合法响应零副作用。
+ */
+export function repairStrayQuotes(text: string): string {
+  let result = "";
+  let inString = false;
+  let escaped = false;
+  let index = 0;
+
+  while (index < text.length) {
+    const char = text[index]!;
+
+    if (inString) {
+      if (escaped) {
+        result += char;
+        escaped = false;
+        index += 1;
+        continue;
+      }
+      if (char === "\\") {
+        result += char;
+        escaped = true;
+        index += 1;
+        continue;
+      }
+      if (char === '"') {
+        let cursor = index + 1;
+        while (cursor < text.length && " \t\r\n".includes(text[cursor]!)) {
+          cursor += 1;
+        }
+        const next = cursor < text.length ? text[cursor]! : "";
+        if (structuralFollowers.has(next) || next === "") {
+          result += char;
+          inString = false;
+        } else {
+          result += "”";
+        }
+        index += 1;
+        continue;
+      }
+      result += char;
+      index += 1;
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+    }
+    result += char;
+    index += 1;
+  }
+
+  return result;
+}
+
 export function parseJsonResponse(responseBody: string): unknown {
+  // ① 原样解析：合法响应直接返回，后续修复步骤对正常路径零开销、零副作用
   try {
     return JSON.parse(responseBody) as unknown;
-  } catch (error) {
-    // 先尝试修掉裸控制字符再解析，仍然失败才报错
-    try {
-      return JSON.parse(escapeControlCharacters(responseBody)) as unknown;
-    } catch {
-      const detail = error instanceof Error ? error.message : "unknown JSON parse error";
-      throw new ProviderRequestError(`LLM returned invalid JSON: ${detail}`);
-    }
+  } catch {
+    // 继续走修复链
   }
+
+  // ② 裸控制字符（模型偶尔在字符串里吐出 \n / \t 原字符）
+  try {
+    return JSON.parse(escapeControlCharacters(responseBody)) as unknown;
+  } catch {
+    // 继续走修复链
+  }
+
+  // ③ 全角闭引号退化成本 ASCII 双引号（本地 9B 模型的确定性缺陷）
+  try {
+    return JSON.parse(escapeControlCharacters(repairStrayQuotes(responseBody))) as unknown;
+  } catch {
+    // 继续走修复链
+  }
+
+  let detail = "unknown JSON parse error";
+  try {
+    JSON.parse(responseBody);
+  } catch (error) {
+    detail = error instanceof Error ? error.message : detail;
+  }
+  throw new ProviderRequestError(`LLM returned invalid JSON: ${detail}`);
 }
 
 export function validateRequest(request: AnalysisRequest): void {

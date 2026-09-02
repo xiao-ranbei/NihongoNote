@@ -13,6 +13,7 @@ import {
   writeDebugLog
 } from "./openai-compatible.js";
 import {
+  ProviderConfigurationError,
   ProviderRequestError,
   type AnalysisRequest,
   type LlmAnalysisResult,
@@ -97,6 +98,7 @@ export class OllamaProvider implements LlmProvider {
   private readonly debugLogging: boolean;
   private readonly debugLogFile: string;
   private readonly endpoint: string;
+  private readonly tagsEndpoint: string;
 
   public constructor(private readonly config: OllamaProviderConfig) {
     this.completionTokenBudget = Math.min(config.maxTokens, 8_192);
@@ -106,15 +108,73 @@ export class OllamaProvider implements LlmProvider {
     this.debugLogging = config.debugLogging;
     this.debugLogFile = config.debugLogFile;
     this.endpoint = chatEndpointFor(config.baseUrl);
+    this.tagsEndpoint = new URL(
+      "api/tags",
+      `${config.baseUrl.replace(/\/+$/u, "").replace(/\/v1$/iu, "")}/`
+    ).toString();
   }
 
   public get name(): string {
     return this.config.providerName;
   }
 
+  /**
+   * 分析前探活本地服务（2026-09-01 新增，见调查报告根因 3）。
+   *
+   * `configured` 对 Ollama 恒为 true（localhost 免鉴权，无 key 概念），
+   * 于是服务没启动时 provider 仍判定「可用」，每个句段都要跑满 timeout
+   * （当时 60s）才失败，整篇分析要白白等上十几分钟，而 UI 只显示
+   * 「本句分析失败」，用户完全看不出是服务没起。
+   * 这里花几毫秒探一次 /api/tags，把「服务未启动」「模型未拉取」两类
+   * 配置问题一次性暴露成可操作的错误，而不是让每个句段各超时一遍。
+   */
+  private async assertServerReady(signal: AbortSignal): Promise<void> {
+    let response: Response;
+    try {
+      response = await fetch(this.tagsEndpoint, {
+        signal: AbortSignal.any([signal, AbortSignal.timeout(5_000)])
+      });
+    } catch (error) {
+      if (signal.aborted) {
+        return; // 用户主动取消，交给后续流程统一处理
+      }
+      throw new ProviderConfigurationError(
+        `本地模型服务未启动或无法连接（${this.tagsEndpoint}）。`
+        + "请先启动 Ollama 再重试分析。"
+        + `原始错误：${sanitizedErrorMessage(error, undefined)}`
+      );
+    }
+
+    if (!response.ok) {
+      throw new ProviderConfigurationError(
+        `本地模型服务响应异常：${this.tagsEndpoint} 返回 HTTP ${response.status}`
+      );
+    }
+
+    const payload = await response.json() as { models?: Array<{ name?: string }> };
+    const installed = (payload.models ?? [])
+      .map((model) => model.name)
+      .filter((name): name is string => typeof name === "string" && name.length > 0);
+    if (installed.length === 0) {
+      return; // 空列表不误判（部分版本/代理不返回详情）
+    }
+    // 请求 "qwen3.5" 而列表是 "qwen3.5:9b" 也算命中：比较 tag 之前的部分
+    const requested = this.model;
+    const hit = installed.some(
+      (name) => name === requested || name.split(":")[0] === requested.split(":")[0]
+    );
+    if (!hit) {
+      throw new ProviderConfigurationError(
+        `本地模型 "${requested}" 未安装。已安装：${installed.join("、")}。`
+        + `请先执行 ollama pull ${requested}`
+      );
+    }
+  }
+
   public async analyze(request: AnalysisRequest): Promise<LlmAnalysisResult> {
     request.signal.throwIfAborted();
     validateRequest(request);
+    await this.assertServerReady(request.signal);
 
     const requestId = randomUUID();
     const segmentFields: SegmentFieldProfile = request.segmentFields ?? "standard";

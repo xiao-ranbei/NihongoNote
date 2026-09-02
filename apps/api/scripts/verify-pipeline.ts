@@ -58,18 +58,26 @@ import {
   createProviderRegistry,
   type LlmBuildConfig
 } from "../src/providers/registry.js";
+import { ProviderConfigurationError } from "../src/providers/types.js";
 import type { LlmAnalysisResult, LlmProvider } from "../src/providers/types.js";
 import {
+  ensureLlmProfiles,
   maskApiKey,
   mergeLlmSettings,
   parseLlmSettings,
   resolveApiKey,
+  resolveSettingsSave,
+  type LlmProfile,
   type LlmSettings,
   type LlmSettingsInput
 } from "../src/settings.js";
 import type { AppConfig } from "../src/config.js";
 import { createDatabase } from "../src/db/database.js";
-import { escapeControlCharacters } from "../src/providers/openai-compatible.js";
+import {
+  escapeControlCharacters,
+  parseJsonResponse,
+  repairStrayQuotes
+} from "../src/providers/openai-compatible.js";
 import {
   hardMaxCompletionTokens,
   packingSafetyRatio,
@@ -283,6 +291,64 @@ check("字符串外的控制字符（结构空白）保持原样", () => {
     "结构空白不该被改成字面 \\n"
   );
   return "只处理字符串字面量内部的控制字符";
+});
+
+console.log("=== 响应解析：全角闭引号退化容错 ===");
+/*
+ * 2026-09-01 实测（qwen3.5:9b）：模型把全角闭引号 ” 写成 ASCII "，
+ * 字符串被提前终止。同样输入两次运行出错位置几乎一致（均 line 38），
+ * 是确定性触发，重试救不回来——必须在解析层修复。
+ * 用例取自真实失败响应 apps/api/data/raw-capture-segment-9.txt 第 37-38 行。
+ */
+const degenerateQuotes = [
+  "{",
+  '  "analyses": [',
+  "    {",
+  '      "segmentId": "doc:0",',
+  '      "tokens": [',
+  "        {",
+  '          "grammarPoint": "数量词，与“1"组成“1 つ”，表示单数或一个单位",',
+  '          "explanation": "数字“二”，此处与“1"连用构成“1 つ”，表示“一件事”。",',
+  '          "confidence": 0.95',
+  "        }",
+  "      ]",
+  "    }",
+  "  ]",
+  "}"
+].join("\n");
+
+check("模型把全角闭引号写成 ASCII 双引号时仍可解析", () => {
+  assert.throws(() => JSON.parse(degenerateQuotes), "构造用例应该先证明原始 JSON 解析不了");
+  const parsed = parseJsonResponse(degenerateQuotes) as {
+    analyses: Array<{ tokens: Array<{ grammarPoint: string; explanation: string }> }>;
+  };
+  const token = parsed.analyses[0]!.tokens[0]!;
+  assert.ok(token.grammarPoint.includes("1 つ"), `内容不应被截断：${token.grammarPoint}`);
+  assert.ok(token.explanation.includes("一件事"), `内容不应被截断：${token.explanation}`);
+  return `修复后内容完整（${token.grammarPoint.length} 字符）`;
+});
+check("迷途引号被替换为全角闭引号而非丢弃", () => {
+  const repaired = repairStrayQuotes('{"a": "与“1"组成"}');
+  const parsed = JSON.parse(repaired) as { a: string };
+  assert.equal(parsed.a, "与“1”组成", "应为全角闭引号，保留原文语义");
+  return "ASCII 双引号 → ”";
+});
+check("结构闭合引号后的 , } ] : 均被正确识别", () => {
+  const clean = '{"a":"x","b":[1,2],"c":{"d":null}}';
+  assert.equal(repairStrayQuotes(clean), clean, "合法 JSON 必须原样返回");
+  return "结构引号不受影响";
+});
+check("已转义的双引号不被误改", () => {
+  const escaped = '{"a":"他说\\"你好\\""}';
+  assert.equal(repairStrayQuotes(escaped), escaped, "\\\" 是合法转义，不能动");
+  return "转义序列保持原样";
+});
+check("合法响应走原样解析，不进入修复链", () => {
+  const valid = '{"analyses":[{"segmentId":"s1","tokens":[]}]}';
+  const parsed = parseJsonResponse(valid) as { analyses: Array<{ segmentId: string }> };
+  assert.equal(parsed.analyses[0]!.segmentId, "s1");
+  assert.equal(repairStrayQuotes(valid), valid, "合法 JSON 零副作用");
+  return "正常路径零开销、零改写";
 });
 
 console.log("=== 契约容错：token 缺 confidence ===");
@@ -1127,6 +1193,56 @@ check("Ollama：配置上限再高也不超过 8192（防 OOM 兜底）", () => 
   assert.equal(huge.completionTokenBudget, 8_192, "100K 配置也必须压到 8K");
   return "min(100000, 8192)=8192";
 });
+/*
+ * 2026-09-01 新增（调查报告根因 3）：configured 恒 true 使服务未启动时
+ * provider 仍判定可用，每个句段各跑满 timeout 才失败（当时 60s × N 段）。
+ * 现在 analyze() 前先探活 /api/tags，把配置问题一次性暴露成可操作错误。
+ * 端口 1 是特权端口，本机必然无服务 → 连接被立即拒绝，不产生网络出站。
+ */
+const probeText = "こんにちは。";
+const probeBoundaries = tokenizeJapanese(probeText, "probe:0");
+const unreachableProvider = new OllamaProvider({
+  providerName: "ollama",
+  baseUrl: "http://127.0.0.1:1",
+  model: "qwen3.5:9b",
+  temperature: 0.2,
+  maxTokens: 8_192,
+  timeoutMs: 300_000,
+  debugLogging: false,
+  debugLogFile: ""
+});
+const probeOutcome = await unreachableProvider.analyze({
+  segments: [{
+    status: "queued",
+    id: "probe:0",
+    index: 0,
+    startOffset: 0,
+    endOffset: probeText.length,
+    speaker: null,
+    documentId: "doc-probe",
+    text: probeText,
+    errorMessage: null
+  }],
+  tokenBoundaries: [{ segmentId: "probe:0", tokens: probeBoundaries }],
+  surroundingContext: [{ segmentId: "probe:0", context: [] }],
+  contentType: "dialogue",
+  targetLevel: "auto",
+  promptVersion: "verify",
+  segmentFields: "standard",
+  signal: new AbortController().signal
+}).then(
+  () => null,
+  (error: unknown) => error
+);
+check("Ollama：服务未启动时快速失败并给出可操作提示", () => {
+  assert.ok(probeOutcome !== null, "连不上服务时不该返回成功");
+  assert.ok(
+    probeOutcome instanceof ProviderConfigurationError,
+    `应为配置错误（而非超时）后快速失败，实际：${String(probeOutcome)}`
+  );
+  assert.match(probeOutcome.message, /未启动|无法连接/u, "错误信息要能指导用户去启动 Ollama");
+  return `ProviderConfigurationError：${probeOutcome.message.slice(0, 48)}…`;
+});
 
 console.log("=== LLM 设置：合并 / 脱敏 / 热切换（零网络请求）===");
 // 设计文档 llm-settings-design.md：db 覆盖 .env、apiKey 脱敏回传与保留、
@@ -1257,6 +1373,125 @@ check("设置：buildLlmProvider 分支（disabled / 未知 provider）", () => 
     "未知 provider 必须抛错，防止静默 fallback"
   );
   return "disabled → configured=false；weird → 抛错";
+});
+
+console.log("=== 多配置管理（profiles）：迁移 / 预设 / 保留 / 切换语义（零网络请求）===");
+
+check("多配置：旧数据（无 profiles）迁移为内置双配置并激活匹配项", () => {
+  // 老用户：db 只有单组 ollama 设置
+  const migrated = ensureLlmProfiles({
+    provider: "ollama",
+    baseUrl: "http://127.0.0.1:11434",
+    model: "qwen3.5:9b",
+    apiKey: "sk-old-key"
+  });
+  assert.equal(migrated.profiles.length, 2, "应生成内置双配置");
+  assert.equal(migrated.profiles[0]!.name, "DeepSeek 云端", "第一个应为 DeepSeek 云端");
+  assert.equal(migrated.profiles[1]!.name, "本地 Ollama", "第二个应为本地 Ollama");
+  assert.equal(migrated.profiles[1]!.model, "qwen3.5:9b", "Ollama 预设模型应为 qwen3.5:9b");
+  assert.equal(migrated.profiles[1]!.apiKey, "sk-old-key", "db 中已有 apiKey 应迁移到匹配的内置配置");
+  assert.equal(migrated.activeProfileId, "profile-ollama", "应激活与当前 provider 匹配的内置配置");
+  return "双配置（DeepSeek + Ollama qwen3.5:9b）；激活 ollama；apiKey 迁移";
+});
+
+check("多配置：全新用户无 db 设置时默认激活 DeepSeek；自定义端点保留为自定义配置", () => {
+  const fresh = ensureLlmProfiles({});
+  assert.equal(fresh.profiles.length, 2, "无设置也应有内置双配置");
+  assert.equal(fresh.activeProfileId, "profile-deepseek", "无设置时默认激活 DeepSeek");
+
+  const custom = ensureLlmProfiles({
+    provider: "openai-compatible",
+    baseUrl: "https://x.example.com/v1",
+    model: "my-model"
+  });
+  assert.equal(custom.profiles.length, 3, "自定义连接参数 → 自定义配置 + 内置双配置");
+  assert.equal(custom.activeProfileId, "profile-current", "自定义配置应激活");
+  assert.equal(custom.profiles[0]!.name, "自定义配置");
+  assert.equal(custom.profiles[0]!.model, "my-model");
+  return "fresh → 激活 deepseek；custom → 3 配置且激活自定义";
+});
+
+check("多配置：已有 profiles 时原样保留，无效 activeProfileId 回退到第一个", () => {
+  const profiles: LlmProfile[] = [
+    { id: "a", name: "A", provider: "deepseek", baseUrl: "https://api.deepseek.com", apiKey: null, model: "deepseek-chat", temperature: 0.2, maxTokens: 12_000, segmentFields: "standard", thinkingType: null, reasoningEffort: null },
+    { id: "b", name: "B", provider: "ollama", baseUrl: "http://127.0.0.1:11434", apiKey: null, model: "qwen3.5:9b", temperature: 0.2, maxTokens: 12_000, segmentFields: "standard", thinkingType: null, reasoningEffort: null }
+  ];
+  const kept = ensureLlmProfiles({ profiles, activeProfileId: "nonexistent" });
+  assert.equal(kept.profiles.length, 2, "profiles 应原样保留（不重建）");
+  assert.equal(kept.activeProfileId, "a", "无效 activeProfileId 应回退到第一个");
+  const valid = ensureLlmProfiles({ profiles, activeProfileId: "b" });
+  assert.equal(valid.activeProfileId, "b", "有效 activeProfileId 应保留");
+  return "已有 profiles 不重建；无效 id 回退首项";
+});
+
+check("多配置：parse 接受 profiles/activeProfileId，顶层字段以激活配置为准", () => {
+  const parsed = parseLlmSettings({
+    provider: "deepseek",
+    baseUrl: "https://api.deepseek.com",
+    apiKey: "sk-top",
+    model: "deepseek-chat",
+    temperature: 0.2,
+    maxTokens: 12_000,
+    segmentFields: "standard",
+    profiles: [
+      { id: "p1", name: "云端", provider: "deepseek", baseUrl: "https://api.deepseek.com", apiKey: "sk-1", model: "deepseek-chat", temperature: 0.2, maxTokens: 12_000, segmentFields: "standard" },
+      { id: "p2", name: "本地", provider: "ollama", baseUrl: "http://127.0.0.1:11434", model: "qwen3.5:9b", temperature: 0.2, maxTokens: 12_000, segmentFields: "standard" }
+    ],
+    activeProfileId: "p2"
+  });
+  assert.equal(parsed.profiles?.length, 2, "profiles 应被解析");
+  assert.equal(parsed.activeProfileId, "p2", "activeProfileId 应被解析");
+  assert.equal(parsed.profiles?.[1]?.apiKey, undefined, "profile 级 apiKey 未提供时为 undefined（zod nullish 语义）");
+  return "profiles/activeProfileId 进 schema；apiKey nullish 可省";
+});
+
+check("多配置：PUT 归一化——新请求激活切换，逐 profile apiKey 保留", () => {
+  const stored: Partial<LlmSettings> = {
+    profiles: [
+      { id: "p1", name: "DeepSeek 云端", provider: "deepseek", baseUrl: "https://api.deepseek.com", apiKey: "sk-49af12345678be98", model: "deepseek-chat", temperature: 0.2, maxTokens: 12_000, segmentFields: "standard", thinkingType: null, reasoningEffort: null },
+      { id: "p2", name: "本地 Ollama", provider: "ollama", baseUrl: "http://127.0.0.1:11434", apiKey: null, model: "qwen3.5:9b", temperature: 0.2, maxTokens: 12_000, segmentFields: "standard", thinkingType: null, reasoningEffort: null }
+    ],
+    activeProfileId: "p1"
+  };
+  // 前端保存：切换到 p2；p1 的 apiKey 回传 masked 值（视为未修改，应保留库中原 key）
+  const parsed = parseLlmSettings({
+    provider: "ollama",
+    baseUrl: "http://127.0.0.1:11434",
+    apiKey: null,
+    model: "qwen3.5:9b",
+    temperature: 0.2,
+    maxTokens: 12_000,
+    segmentFields: "standard",
+    profiles: [
+      { id: "p1", name: "DeepSeek 云端", provider: "deepseek", baseUrl: "https://api.deepseek.com", apiKey: "sk-49a…be98", model: "deepseek-chat", temperature: 0.2, maxTokens: 12_000, segmentFields: "standard" },
+      { id: "p2", name: "本地 Ollama", provider: "ollama", baseUrl: "http://127.0.0.1:11434", model: "qwen3.5:9b", temperature: 0.2, maxTokens: 12_000, segmentFields: "standard" }
+    ],
+    activeProfileId: "p2"
+  });
+  const resolved = resolveSettingsSave(parsed, stored);
+  assert.equal(resolved.activeProfileId, "p2", "激活 id 应切换为 p2");
+  assert.equal(resolved.settings.provider, "ollama", "顶层生效字段应以激活配置为准");
+  assert.equal(resolved.settings.apiKey, null, "Ollama 激活时无 key");
+  assert.equal(resolved.profiles[0]!.apiKey, "sk-49af12345678be98", "p1 回传 masked key 应保留库中原值");
+  assert.equal(resolved.settings.profiles?.length, 2, "settings 应携带全部 profiles");
+  return "激活切换 → 顶层跟随；p1 masked key 保留库中原值";
+});
+
+check("多配置：PUT 归一化——旧单组请求兼容（无 profiles 字段）", () => {
+  const resolved = resolveSettingsSave(parseLlmSettings({
+    provider: "ollama",
+    baseUrl: "http://127.0.0.1:11434",
+    apiKey: "sk-new",
+    model: "qwen3.5:9b",
+    temperature: 0.2,
+    maxTokens: 12_000,
+    segmentFields: "standard"
+  }), {});
+  assert.equal(resolved.profiles.length, 2, "旧请求也应以双配置为底");
+  assert.equal(resolved.settings.provider, "ollama", "旧请求展开字段应生效");
+  assert.equal(resolved.settings.apiKey, "sk-new", "新 key 应直接采用");
+  assert.equal(resolved.activeProfileId, resolved.profiles[0]!.id, "旧请求应激活第一个配置");
+  return "无 profiles → 双配置底 + 展开字段写回 + 新 key 采用";
 });
 
 console.log("");

@@ -27,3 +27,59 @@
 - **离线扩充固定库**：从「未命中 TOP 30」挑高频礼貌表达人工补 5-10 条
 - **Ollama 实测**：本机装 Ollama + `ollama pull qwen3.5:9b` 后跑通完整链路
 - **覆盖率基线跟踪**：每次词典扩充后跑 `pnpm --filter @nihongonote/api dictionary-coverage` 对比
+
+---
+
+## 分析失败调查（2026-09-01）
+
+详见 `docs/analysis-failure-investigation-2026-09-01.md`。诊断全程使用本地 Ollama，**零云端费用**。
+
+### 结论
+
+DB 中 8 条 `failed` 句段已全部归因：6 条属 08-29 旧版本缺陷（截断 / schema 不匹配），
+已被自适应 token 上限与 prompt v5 修复；**剩余 2 条是当前仍存在的问题，且均已 100% 复现**。
+
+| 根因 | 证据 | 性质 |
+| --- | --- | --- |
+| **`LLM_TIMEOUT_MS=60000` 低于本地模型实际耗时** | 段 7 实测需 **78.1s / 4995 tokens / 63.9 tok/s**，阈值仅 60s；现有「自动重试」超时上限不变，必然二次失败 | 配置性永久失败 |
+| **9B 模型稳定退化全角闭引号为 ASCII `"`** | 段 9 原始输出 L37：`"数量词，与“1"组成“1 つ”…"`；全篇 12 处，两次运行出错位置相同（均 L38） | 确定性触发，非随机 |
+| **Ollama 未启动时静默失败** | `configured` 恒 true，服务不在时每句段各跑一遍 60s 超时才失败 | 可观测性问题 |
+
+### 修复实施（**已落地并验证**）
+
+- **P0** ✓ `providers/openai-compatible.ts` 新增 `repairStrayQuotes()`，`parseJsonResponse()` 改为三级修复链
+  （原样解析 → 控制字符转义 → 引号修复）。只对解析失败的响应生效，正常路径零开销。
+- **P1** ✓ `.env` 的 `LLM_TIMEOUT_MS` 60000 → 300000。
+- **P2** ✓ `providers/ollama.ts` 新增 `assertServerReady()`，分析前探活 `/api/tags`，
+  区分「服务未启动」与「模型未安装」并给出可操作提示。
+- **P3** ✓ `.env` 的 `LLM_DEBUG_LOGGING` false → true（附实测依据注释）。
+- 附带修正：诊断脚本的 `llmDebugLogging` 原先写死 `false`，与真实服务不一致，已改为跟随 `.env`。
+
+**回归**：`verify-pipeline` **93/93 通过**（原 87 + 新增 6 条用例）；typecheck 干净；
+**实机复跑两个原失败段全部成功**——段 7（82.8s / 4915 tokens）、段 9（38.3s / 2412 tokens）。
+
+### 遗留项（均已闭环，无待办）
+
+- ✓ **db 中 `profile-current` 串味配置已删除**。成因是迁移时 `.env` 的 `LLM_PROVIDER` 仍是
+  `deepseek` 而 `baseUrl/model` 已指本地 Ollama，被拼成一组必然失败的配置。
+  删前已备份 `data/nihongonote.db.bak-20260902-084940`；现保留内置双配置，
+  激活项与顶层生效字段均不变（`ollama / 127.0.0.1:11434 / qwen3.5:9b`）。
+- ✓ **`.env` 保持 `LLM_BATCH_SIZE=1` / `LLM_BATCH_CONCURRENCY=1`，不提速**。
+  核查发现提速路径对本地模型不存在：装箱预算为 `8192 × 0.77 = 6308`，
+  而估算式最小两段开销 `2×3500 + 2×230 = 7460 > 6308` → 批次恒为 1，
+  调大 `LLM_BATCH_SIZE` 是空转；`CONCURRENCY=2` 需约 20.6GB VRAM > 16GB，
+  会被 Ollama 排队而非真并行，收益近零却要承担 OOM 风险。
+
+### 新增诊断工具
+
+- `apps/api/scripts/diagnose-failures.ts` — 配置体检 / 服务探活 / 全篇超时风险扫描 / LLM 实测复现
+  （默认零 LLM；`--llm`、`--generous-timeout` 开启实测）
+- `apps/api/scripts/capture-raw-output.ts <段号>` — 抓取模型原始输出并定位非法字符
+
+### 实测标定（供容量规划）
+
+`qwen3.5:9b`，`num_ctx=12288`，`think:false`，`temperature=0.2` → **约 64 tok/s**；
+`outputTokens ≈ 340 + 186 × n`（n = 送 LLM 的 token 数）。
+60s 超时下 n 的安全上限约 **19**。
+注意 `llm-budget.ts` 的估算式（3,500/段 + 230/字符）按 DeepSeek thinking 标定，
+对本地模型高估约 4.8 倍，**不可用于推算本地耗时**。
