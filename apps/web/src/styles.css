@@ -1853,6 +1853,30 @@ h2 {
   color: var(--accent-deep);
 }
 
+/*
+ * 主题切换下拉（theme-system.md / issues I-14）。
+ * 只写控件外观，配色全部走 Token，切换 data-theme 后自动跟随六套主题。
+ */
+.theme-select {
+  background: var(--panel-soft);
+  border: 1px solid var(--line-mid);
+  border-radius: 999px;
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.78rem;
+  padding: 0.35rem 0.7rem;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.theme-select:hover {
+  background: var(--hover);
+  border-color: var(--line-accent-hover);
+}
+.theme-select:focus-visible {
+  outline: 2px solid var(--line-accent);
+  outline-offset: 2px;
+}
+
 .tools-page {
   display: flex;
   flex-direction: column;

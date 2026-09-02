@@ -79,6 +79,44 @@ function storedValue(key: string): string | null {
   return typeof window === "undefined" ? null : window.localStorage.getItem(key);
 }
 
+/* ---------------- 主题（设计文档 theme-system.md，issues I-14） ---------------- */
+
+const themeStorageKey = "nn-theme";
+
+/**
+ * 六套主题对应六个 UI 提案（theme-system.md 第二节）。
+ * `auto` 不是主题名，而是「跟随系统深色偏好」的偏好标记。
+ */
+const themeOptions: Array<{ value: string; label: string }> = [
+  { value: "auto", label: "主题：跟随系统" },
+  { value: "paper", label: "纸感（默认）" },
+  { value: "night", label: "夜间" },
+  { value: "minimal", label: "极简" },
+  { value: "magazine", label: "杂志" },
+  { value: "workbench", label: "工作台" },
+  { value: "notebook", label: "手帐" }
+];
+
+const themeNames = new Set(
+  themeOptions.filter((option) => option.value !== "auto").map((option) => option.value)
+);
+
+/** 类型守卫：窄化后调用方可直接把 localStorage 值当作有效偏好使用。 */
+function isThemePreference(value: string | null): value is string {
+  return value !== null && (value === "auto" || themeNames.has(value));
+}
+
+/** auto → 跟随 `prefers-color-scheme`；其余返回主题名（非法值回退 paper）。 */
+function resolveThemeName(preference: string): string {
+  if (preference !== "auto") {
+    return themeNames.has(preference) ? preference : "paper";
+  }
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return "paper";
+  }
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "night" : "paper";
+}
+
 function isLibraryStatus(value: string | null): value is LibraryStatus {
   return value === "draft"
     || value === "analyzing"
@@ -93,6 +131,36 @@ function formatDate(value: string): string {
     hour: "2-digit",
     minute: "2-digit"
   }).format(new Date(value));
+}
+
+/* ---------------- 导出（需求 5.5，issues I-27） ---------------- */
+
+/** 导出格式标记：日后 schema 变更时，导入/迁移脚本可据此自判。 */
+const exportFormatVersion = 1;
+
+/** 去掉文件系统非法字符，避免 Windows/macOS 下载失败；空标题回退默认名。 */
+function safeFileStem(value: string): string {
+  const cleaned = value.replace(/[\\/:*?"<>|\r\n\t]/gu, "").trim();
+  return cleaned.length > 0 ? cleaned.slice(0, 60) : "nihongonote";
+}
+
+function fileStamp(): string {
+  const now = new Date();
+  const pad = (value: number): string => String(value).padStart(2, "0");
+  return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
+}
+
+/** 浏览器端触发下载；用完立即释放 object URL，避免长会话内存泄漏。 */
+function downloadFile(fileName: string, content: string, mimeType: string): void {
+  const blob = new Blob([content], { type: `${mimeType};charset=utf-8` });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
 }
 
 function statusLabel(status: DocumentDetail["status"] | DocumentDetail["segments"][number]["status"]): string {
@@ -860,6 +928,28 @@ export default function App(): ReactElement {
   });
   const [error, setError] = useState<string | null>(null);
   const [llmBalance, setLlmBalance] = useState<LlmBalance | null>(null);
+  const [themePreference, setThemePreference] = useState<string>(() => {
+    const value = storedValue(themeStorageKey);
+    return isThemePreference(value) ? value : "auto";
+  });
+
+  /*
+   * 主题持久化 + 系统深色跟随（I-14）。
+   * auto 时仍监听媒体查询，系统切换深色即刻生效，无需刷新。
+   */
+  useEffect(() => {
+    const applyTheme = (): void => {
+      document.documentElement.dataset.theme = resolveThemeName(themePreference);
+    };
+    applyTheme();
+    window.localStorage.setItem(themeStorageKey, themePreference);
+    if (typeof window.matchMedia !== "function") {
+      return;
+    }
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    media.addEventListener("change", applyTheme);
+    return () => media.removeEventListener("change", applyTheme);
+  }, [themePreference]);
 
   useEffect(() => {
     void getHealth()
@@ -1111,6 +1201,37 @@ export default function App(): ReactElement {
     }
   }
 
+  function handleExportSourceText(): void {
+    if (!selectedDocument) {
+      return;
+    }
+    const stem = safeFileStem(selectedDocument.title);
+    downloadFile(`${stem}-原文-${fileStamp()}.txt`, selectedDocument.sourceText, "text/plain");
+  }
+
+  /*
+   * 导出解析 JSON（需求 5.5 / issues I-27）。
+   * DocumentDetail 已含 sourceText / contentBlocks / segments（含 AI 解析与人工修正版本），
+   * 因此纯前端即可完成，无需新增后端端点。
+   */
+  function handleExportAnalysisJson(): void {
+    if (!selectedDocument) {
+      return;
+    }
+    const stem = safeFileStem(selectedDocument.title);
+    const payload = {
+      format: "nihongonote-document",
+      formatVersion: exportFormatVersion,
+      exportedAt: new Date().toISOString(),
+      document: selectedDocument
+    };
+    downloadFile(
+      `${stem}-解析-${fileStamp()}.json`,
+      JSON.stringify(payload, null, 2),
+      "application/json"
+    );
+  }
+
   async function handleRetrySegment(segmentId: string): Promise<void> {
     setRetryingSegmentId(segmentId);
     setError(null);
@@ -1229,6 +1350,19 @@ export default function App(): ReactElement {
           >
             设置
           </button>
+          <select
+            aria-label="界面主题"
+            className="theme-select"
+            onChange={(event) => setThemePreference(event.target.value)}
+            title="切换界面主题（六套提案）；跟随系统会随系统深色模式自动切换"
+            value={themePreference}
+          >
+            {themeOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
           <button
             aria-expanded={isLibraryOpen}
             className="library-toggle"
@@ -1442,6 +1576,24 @@ export default function App(): ReactElement {
                     type="button"
                   >
                     {isEditingDocument ? "关闭设置" : "编辑设置"}
+                  </button>
+                  <button
+                    className="text-button"
+                    disabled={!selectedDocument}
+                    onClick={handleExportSourceText}
+                    title="把当前文章的原文导出为 .txt"
+                    type="button"
+                  >
+                    导出原文
+                  </button>
+                  <button
+                    className="text-button"
+                    disabled={!selectedDocument}
+                    onClick={handleExportAnalysisJson}
+                    title="把当前文章的解析结果导出为 .json（含句段、token 分析与人工修正版本）"
+                    type="button"
+                  >
+                    导出解析
                   </button>
                   {isAnalysisRunning ? (
                     <button
