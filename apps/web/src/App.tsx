@@ -1056,6 +1056,19 @@ export default function App(): ReactElement {
     }
   }
 
+  function handleNewDocument(): void {
+    setError(null);
+    setSelectedDocument(null);
+    setIsEditingDocument(false);
+    setSelectedSegmentId(null);
+    setSelectedTokenId(null);
+    setAnalysisProgress(null);
+    setTitle("");
+    setSourceText("");
+    setContentType("article");
+    setTargetLevel("auto");
+  }
+
   async function handleStartAnalysis(): Promise<void> {
     if (!selectedDocument) {
       return;
@@ -1255,6 +1268,15 @@ export default function App(): ReactElement {
               <div className="library-heading-actions">
                 <span className="count-badge">{documents.length}</span>
                 <button
+                  aria-label="新建学习材料"
+                  className="panel-icon-button"
+                  onClick={handleNewDocument}
+                  title="新建学习材料"
+                  type="button"
+                >
+                  ＋
+                </button>
+                <button
                   aria-label="隐藏学习库"
                   className="panel-icon-button"
                   onClick={() => setIsLibraryOpen(false)}
@@ -1326,66 +1348,68 @@ export default function App(): ReactElement {
             <>
           {error ? <div className="error-banner">{error}</div> : null}
 
-          <form className="composer-card" onSubmit={(event) => void handleCreateDocument(event)}>
-            <div className="panel-heading">
-              <div>
-                <p className="section-kicker">NEW MATERIAL</p>
-                <h2>添加学习材料</h2>
+          {selectedDocument === null ? (
+            <form className="composer-card" onSubmit={(event) => void handleCreateDocument(event)}>
+              <div className="panel-heading">
+                <div>
+                  <p className="section-kicker">NEW MATERIAL</p>
+                  <h2>添加学习材料</h2>
+                </div>
+                <span className="foundation-badge">P0 FOUNDATION</span>
               </div>
-              <span className="foundation-badge">P0 FOUNDATION</span>
-            </div>
-            <label>
-              标题
-              <input
-                onChange={(event) => setTitle(event.target.value)}
-                placeholder="例如：商务需求访谈・场景 1"
-                value={title}
-              />
-            </label>
-            <label>
-              内容类型
-              <select
-                onChange={(event) => setContentType(event.target.value as ContentType)}
-                value={contentType}
-              >
-                {contentTypeOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-              <span className="field-note">自动识别只作建议，保存后仍以你的选择为准。</span>
-            </label>
-            <label>
-              解释等级
-              <select
-                onChange={(event) => setTargetLevel(event.target.value as TargetLevel)}
-                value={targetLevel}
-              >
-                {levelOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-              <span className="field-note">只影响教学表达；基础 token、语法和句意分析保持共用。</span>
-            </label>
-            <label>
-              日语原文
-              <textarea
-                onChange={(event) => setSourceText(event.target.value)}
-                placeholder={"粘贴课文、文章或对话，例如：\n初めまして…"}
-                rows={11}
-                value={sourceText}
-              />
-            </label>
-            <div className="form-footer">
-              <span>原文会保持连续阅读，分析结果再按稳定 token 位置叠加标注。</span>
-              <button className="primary-button" disabled={isSaving} type="submit">
-                {isSaving ? "保存中…" : "保存文章"}
-              </button>
-            </div>
-          </form>
+              <label>
+                标题
+                <input
+                  onChange={(event) => setTitle(event.target.value)}
+                  placeholder="例如：商务需求访谈・场景 1"
+                  value={title}
+                />
+              </label>
+              <label>
+                内容类型
+                <select
+                  onChange={(event) => setContentType(event.target.value as ContentType)}
+                  value={contentType}
+                >
+                  {contentTypeOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <span className="field-note">自动识别只作建议，保存后仍以你的选择为准。</span>
+              </label>
+              <label>
+                解释等级
+                <select
+                  onChange={(event) => setTargetLevel(event.target.value as TargetLevel)}
+                  value={targetLevel}
+                >
+                  {levelOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <span className="field-note">只影响教学表达；基础 token、语法和句意分析保持共用。</span>
+              </label>
+              <label>
+                日语原文
+                <textarea
+                  onChange={(event) => setSourceText(event.target.value)}
+                  placeholder={"粘贴课文、文章或对话，例如：\n初めまして…"}
+                  rows={11}
+                  value={sourceText}
+                />
+              </label>
+              <div className="form-footer">
+                <span>原文会保持连续阅读，分析结果再按稳定 token 位置叠加标注。</span>
+                <button className="primary-button" disabled={isSaving} type="submit">
+                  {isSaving ? "保存中…" : "保存文章"}
+                </button>
+              </div>
+            </form>
+          ) : null}
 
           {selectedDocument ? (
             <article className="reader-card">
@@ -1405,6 +1429,13 @@ export default function App(): ReactElement {
                 </div>
                 <div className="reader-actions">
                   <span className="status-label">{statusLabel(selectedDocument.status)}</span>
+                  <button
+                    className="text-button"
+                    onClick={handleNewDocument}
+                    type="button"
+                  >
+                    新建
+                  </button>
                   <button
                     className="text-button"
                     onClick={() => setIsEditingDocument((current) => !current)}

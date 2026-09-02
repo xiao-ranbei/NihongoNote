@@ -287,12 +287,31 @@ export interface LlmSettings {
   segmentFields: SegmentFieldProfile;
   thinkingType: LlmThinkingType | null;
   reasoningEffort: LlmReasoningEffort | null;
+  /** 多配置管理：全部已保存配置（可选——旧数据/单组请求可不带）。 */
+  profiles?: LlmProfile[];
+  /** 当前激活的配置 id。 */
+  activeProfileId?: string;
+}
+
+/** 一组完整的模型配置（多配置管理槽位）。apiKey 在响应中为 masked，空 = 未配置。 */
+export interface LlmProfile {
+  id: string;
+  name: string;
+  provider: LlmProviderName;
+  baseUrl: string;
+  apiKey: string | null;
+  model: string;
+  temperature: number;
+  maxTokens: number;
+  segmentFields: SegmentFieldProfile;
+  thinkingType: LlmThinkingType | null;
+  reasoningEffort: LlmReasoningEffort | null;
 }
 
 /** PUT 请求体：apiKey 可选（空 / masked 值 = 不修改，保留库中原值）。 */
 export type LlmSettingsInput = Omit<LlmSettings, "apiKey"> & { apiKey?: string | null };
 
-/** GET/PUT 响应：生效配置（apiKey 已脱敏）+ 逐字段来源 + 当前 provider 实例信息。 */
+/** GET/PUT 响应：生效配置（apiKey 已脱敏）+ 逐字段来源 + 当前 provider 实例信息 + 全部配置。 */
 export interface LlmSettingsState {
   settings: LlmSettings;
   source: Partial<Record<keyof LlmSettings, "db" | "env">>;
@@ -302,6 +321,10 @@ export interface LlmSettingsState {
     model: string;
     isLocal: boolean;
   };
+  /** 全部已保存配置（apiKey 已脱敏）。 */
+  profiles: LlmProfile[];
+  /** 当前激活的配置 id。 */
+  activeProfileId: string;
 }
 
 function parseLlmSettingsState(payload: unknown): LlmSettingsState {

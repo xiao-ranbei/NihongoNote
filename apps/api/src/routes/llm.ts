@@ -9,10 +9,11 @@ import {
 } from "../providers/registry.js";
 import type { AnalysisService } from "../services/analysis-service.js";
 import {
+  ensureLlmProfiles,
   maskApiKey,
   mergeLlmSettings,
   parseLlmSettings,
-  resolveApiKey,
+  resolveSettingsSave,
   settingsDefaultsFromConfig,
   type LlmSettings,
   type LlmSettingsInput
@@ -68,13 +69,26 @@ export function registerLlmRoutes(app: FastifyInstance, deps: LlmRouteDeps): voi
     const merged = mergeLlmSettings(defaults, stored);
     const source = {} as Record<keyof LlmSettings, "db" | "env">;
     for (const key of Object.keys(merged) as Array<keyof LlmSettings>) {
+      if (key === "profiles" || key === "activeProfileId") {
+        continue; // 多配置字段不参与 db/env 来源标记
+      }
       const storedValue = stored[key];
       source[key] = storedValue !== undefined && storedValue !== null ? "db" : "env";
     }
+    // 生效配置 = 激活的 profile；无 profiles（旧数据）时由 ensureLlmProfiles 迁移出内置双配置
+    const { profiles, activeProfileId } = ensureLlmProfiles(stored);
+    const active = profiles.find((p) => p.id === activeProfileId) ?? profiles[0]!;
     return {
       settings: {
-        ...merged,
-        apiKey: maskApiKey(merged.apiKey ?? null)
+        provider: active.provider,
+        baseUrl: active.baseUrl,
+        apiKey: maskApiKey(active.apiKey ?? null),
+        model: active.model,
+        temperature: active.temperature,
+        maxTokens: active.maxTokens,
+        segmentFields: active.segmentFields,
+        thinkingType: active.thinkingType,
+        reasoningEffort: active.reasoningEffort
       },
       source,
       provider: {
@@ -82,7 +96,9 @@ export function registerLlmRoutes(app: FastifyInstance, deps: LlmRouteDeps): voi
         configured: providerHolder.current.configured,
         model: providerHolder.current.model,
         isLocal: providerHolder.current.name === "ollama"
-      }
+      },
+      profiles: profiles.map((p) => ({ ...p, apiKey: maskApiKey(p.apiKey ?? null) })),
+      activeProfileId
     };
   }
 
@@ -102,10 +118,8 @@ export function registerLlmRoutes(app: FastifyInstance, deps: LlmRouteDeps): voi
       );
     }
     const stored = readStored();
-    const settings: LlmSettings = {
-      ...parsed,
-      apiKey: resolveApiKey(parsed, stored)
-    };
+    // 多配置归一化（纯函数）：逐 profile apiKey 保留、激活配置决定顶层生效字段、兼容旧单组请求
+    const { settings } = resolveSettingsSave(parsed, stored);
 
     // 写库
     const payload = JSON.stringify(settings);

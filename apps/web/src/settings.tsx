@@ -5,24 +5,27 @@ import type { SegmentFieldProfile } from "@nihongonote/core";
 import {
   getLlmSettings,
   saveLlmSettings,
+  type LlmProfile,
   type LlmProviderName,
   type LlmReasoningEffort,
-  type LlmSettings,
+  type LlmSettingsInput,
   type LlmSettingsState,
   type LlmThinkingType
 } from "./api/client";
 
 /**
- * LLM 设置页（设计文档 llm-settings-design.md，落实 LLM-011 成本显性）。
+ * LLM 设置页（设计文档 llm-settings-design.md，落实 LLM-011 成本显性 + 多配置管理）。
  *
- * 职责：本地 Ollama / 云端 API（DeepSeek 等）/ 禁用 三选一，保存即热切换、无需重启。
+ * 职责：
+ * - 多配置管理（2026-08-30）：预先保存多组模型配置（默认预置 DeepSeek 云端 + 本地
+ *   Ollama qwen3.5:9b），可随时在已保存配置之间快速切换，保存即热切换、无需重启；
  * - apiKey 明文存本机库；输入框不回填真实 key，placeholder 显示 masked，留空 = 不修改；
  * - 保存成功后回调 App 刷新顶栏余额 pill（provider 信息可能已变化）。
  */
 
 /** 各 provider 的端点/模型预设（仅当 baseUrl/model 仍是旧 provider 预设值时自动替换）。 */
 const providerPresets: Partial<Record<LlmProviderName, { baseUrl: string; model: string }>> = {
-  ollama: { baseUrl: "http://127.0.0.1:11434", model: "qwen2.5:7b" },
+  ollama: { baseUrl: "http://127.0.0.1:11434", model: "qwen3.5:9b" },
   deepseek: { baseUrl: "https://api.deepseek.com", model: "deepseek-chat" },
   openai: { baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" },
   "openai-compatible": { baseUrl: "https://api.example.com/v1", model: "your-model-name" }
@@ -77,7 +80,14 @@ const providerLabels: Record<string, string> = {
 
 export function SettingsPanel(props: { onSettingsSaved: () => void }): ReactElement {
   const [state, setState] = useState<LlmSettingsState | null>(null);
-  const [form, setForm] = useState<LlmSettings | null>(null);
+  /** 全部已保存配置（apiKey 为 masked，来自 GET 响应）。 */
+  const [profiles, setProfiles] = useState<LlmProfile[]>([]);
+  /** 当前激活（生效）的配置 id。 */
+  const [activeProfileId, setActiveProfileId] = useState("");
+  /** 正在编辑的配置 id。 */
+  const [editingProfileId, setEditingProfileId] = useState("");
+  /** 编辑中的配置表单；apiKey 不回填真实 key（留空 = 不修改）。 */
+  const [form, setForm] = useState<LlmProfile | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -91,8 +101,15 @@ export function SettingsPanel(props: { onSettingsSaved: () => void }): ReactElem
           return;
         }
         setState(next);
+        setProfiles(next.profiles ?? []);
+        const initialId = next.activeProfileId || next.profiles?.[0]?.id || "";
+        setActiveProfileId(initialId);
+        setEditingProfileId(initialId);
+        const target = next.profiles?.find((p) => p.id === initialId)
+          ?? next.profiles?.[0]
+          ?? { id: "profile-current", name: "自定义配置", ...next.settings, apiKey: "" };
         // apiKey 不回填输入框（留空 = 不修改），placeholder 显示 masked 值
-        setForm({ ...next.settings, apiKey: "" });
+        setForm({ ...target, apiKey: "" });
       })
       .catch((reason: unknown) => {
         if (!cancelled) {
@@ -109,7 +126,7 @@ export function SettingsPanel(props: { onSettingsSaved: () => void }): ReactElem
     };
   }, []);
 
-  function updateField<K extends keyof LlmSettings>(key: K, value: LlmSettings[K]): void {
+  function updateField<K extends keyof LlmProfile>(key: K, value: LlmProfile[K]): void {
     setForm((current) => (current ? { ...current, [key]: value } : current));
   }
 
@@ -127,7 +144,98 @@ export function SettingsPanel(props: { onSettingsSaved: () => void }): ReactElem
     return providerPresets[provider] ?? null;
   }
 
-  /** 切换提供方：若 baseUrl/model 还是旧 provider 的预设值（用户没改过），则换成新预设。 */
+  /** 把 form 的编辑内容落回 profiles（apiKey 为空 = 不修改，保留库中值）。 */
+  function applyEditToProfiles(current: LlmProfile[], editingId: string, draft: LlmProfile | null): LlmProfile[] {
+    if (!draft) {
+      return current;
+    }
+    return current.map((p) => (
+      p.id === editingId
+        ? { ...draft, apiKey: draft.apiKey?.trim() ? draft.apiKey : p.apiKey }
+        : p
+    ));
+  }
+
+  /** 组装 PUT body：激活配置展开为顶层字段 + 全部 profiles + activeProfileId。 */
+  function buildBody(current: LlmProfile[], activeId: string): LlmSettingsInput {
+    const active = current.find((p) => p.id === activeId) ?? current[0]!;
+    return {
+      provider: active.provider,
+      baseUrl: active.baseUrl,
+      apiKey: active.apiKey ?? null,
+      model: active.model,
+      temperature: active.temperature,
+      maxTokens: active.maxTokens,
+      segmentFields: active.segmentFields,
+      thinkingType: active.thinkingType,
+      reasoningEffort: active.reasoningEffort,
+      profiles: current,
+      activeProfileId: active.id
+    };
+  }
+
+  /** 保存成功后刷新各状态（保持当前编辑项，重新载入其 masked key）。 */
+  function adoptNext(next: LlmSettingsState, keepEditingId: string): void {
+    setState(next);
+    setProfiles(next.profiles ?? []);
+    setActiveProfileId(next.activeProfileId ?? activeProfileId);
+    const target = next.profiles?.find((p) => p.id === keepEditingId) ?? next.profiles?.[0];
+    if (target) {
+      setForm({ ...target, apiKey: "" });
+    }
+  }
+
+  /** 切换编辑目标：先把当前编辑内容落回 profiles，再载入目标配置。 */
+  function selectProfile(profileId: string): void {
+    if (profileId === editingProfileId) {
+      return;
+    }
+    setProfiles((current) => applyEditToProfiles(current, editingProfileId, form));
+    setEditingProfileId(profileId);
+    const target = profiles.find((p) => p.id === profileId) ?? profiles[0]!;
+    setForm({ ...target, apiKey: "" });
+    setError(null);
+  }
+
+  /** 新建配置：复制当前编辑项为新槽位（保留连接参数，apiKey 留空）。 */
+  function handleAddProfile(): void {
+    const source = form ?? profiles[0];
+    if (!source) {
+      return;
+    }
+    const id = `profile-${Date.now()}`;
+    const existing = new Set(profiles.map((p) => p.name));
+    let name = "新配置";
+    let i = 2;
+    while (existing.has(name)) {
+      name = `新配置 ${i}`;
+      i += 1;
+    }
+    setProfiles([...profiles, { ...source, id, name, apiKey: "" }]);
+    setEditingProfileId(id);
+    setForm({ ...source, id, name, apiKey: "" });
+    setError(null);
+  }
+
+  /** 删除当前编辑的配置：至少保留一个；激活中的配置需先切换才能删除。 */
+  function handleDeleteProfile(): void {
+    if (profiles.length <= 1) {
+      setError("至少保留一个配置");
+      return;
+    }
+    if (editingProfileId === activeProfileId) {
+      setError("当前激活的配置不能删除，请先切换到其他配置");
+      return;
+    }
+    const next = profiles.filter((p) => p.id !== editingProfileId);
+    setProfiles(next);
+    setEditingProfileId(activeProfileId);
+    const target = next.find((p) => p.id === activeProfileId) ?? next[0]!;
+    setForm({ ...target, apiKey: "" });
+    setError(null);
+  }
+
+  /** 切换 provider 分组：若 baseUrl/model 还是旧 provider 的预设值（用户没改过），则换成新预设。 */
   function handleGroupChange(nextGroup: ProviderGroup): void {
     setForm((current) => {
       if (!current) {
@@ -174,6 +282,7 @@ export function SettingsPanel(props: { onSettingsSaved: () => void }): ReactElem
     });
   }
 
+  /** 保存当前编辑并整体落库（profiles + 激活项）。 */
   async function handleSave(): Promise<void> {
     if (!form) {
       return;
@@ -182,14 +291,38 @@ export function SettingsPanel(props: { onSettingsSaved: () => void }): ReactElem
     setError(null);
     setNotice(null);
     try {
-      const next = await saveLlmSettings(form);
-      setState(next);
-      // 保存成功后清空 key 输入（placeholder 自动显示最新 masked 值）
-      setForm({ ...next.settings, apiKey: "" });
+      const updated = applyEditToProfiles(profiles, editingProfileId, form);
+      setProfiles(updated);
+      const next = await saveLlmSettings(buildBody(updated, activeProfileId));
+      adoptNext(next, editingProfileId);
       setNotice("设置已保存并立即生效，无需重启服务。");
       props.onSettingsSaved();
     } catch (reason: unknown) {
       setError(reason instanceof Error ? reason.message : "保存失败");
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  /** 快速切换：把指定配置设为当前并立即保存生效（热切换，无需点主保存）。 */
+  async function handleActivate(profileId: string): Promise<void> {
+    if (!form || profileId === activeProfileId) {
+      return;
+    }
+    setIsSaving(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const updated = applyEditToProfiles(profiles, editingProfileId, form);
+      setProfiles(updated);
+      const target = updated.find((p) => p.id === profileId) ?? updated[0]!;
+      const next = await saveLlmSettings(buildBody(updated, target.id));
+      adoptNext(next, profileId);
+      setEditingProfileId(profileId);
+      setNotice(`已切换到「${target.name}」并立即生效，无需重启服务。`);
+      props.onSettingsSaved();
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : "切换失败");
     } finally {
       setIsSaving(false);
     }
@@ -227,8 +360,9 @@ export function SettingsPanel(props: { onSettingsSaved: () => void }): ReactElem
 
   const group = groupOf(form.provider);
   const isCloud = group === "cloud";
-  const maskedKey = state.settings.apiKey;
-  const dbFields = (Object.keys(state.source) as Array<keyof LlmSettings>)
+  const maskedKey = profiles.find((p) => p.id === editingProfileId)?.apiKey ?? "";
+  const activeProfile = profiles.find((p) => p.id === activeProfileId) ?? profiles[0]!;
+  const dbFields = (Object.keys(state.source) as Array<keyof LlmSettingsState["settings"]>)
     .filter((key) => state.source[key] === "db");
 
   return (
@@ -238,7 +372,7 @@ export function SettingsPanel(props: { onSettingsSaved: () => void }): ReactElem
           <p className="section-kicker">SETTINGS</p>
           <h2>设置</h2>
         </div>
-        <span className="foundation-badge">本地 / 云端切换</span>
+        <span className="foundation-badge">多配置 · 本地 / 云端切换</span>
       </div>
 
       {error ? <div className="error-banner">{error}</div> : null}
@@ -248,7 +382,7 @@ export function SettingsPanel(props: { onSettingsSaved: () => void }): ReactElem
         <div>
           <span>当前生效</span>
           <strong>
-            {providerLabels[state.provider.name] ?? state.provider.name} · {state.provider.model}
+            {activeProfile.name}（{providerLabels[activeProfile.provider] ?? activeProfile.provider} · {activeProfile.model}）
           </strong>
         </div>
         <span className={`settings-provider-state ${state.provider.configured ? "is-ready" : "is-missing"}`}>
@@ -256,13 +390,70 @@ export function SettingsPanel(props: { onSettingsSaved: () => void }): ReactElem
         </span>
       </div>
       <p className="reader-note">
-        {state.provider.isLocal
+        {activeProfile.provider === "ollama"
           ? "本地模型：免费、离线运行，不产生任何 API 费用。"
           : "云端 API：按 token 用量计费（闲时/高峰单价不同）。保存即热切换，无需重启服务。"}
       </p>
 
       <div className="settings-section">
+        <h3>0. 已保存配置（多配置切换）</h3>
+        <p className="reader-note tools-subheading">
+          预先保存多组模型配置，随时一键切换生效；默认预置「DeepSeek 云端」与「本地 Ollama（qwen3.5:9b）」两组。
+        </p>
+        <div className="profile-tabs">
+          {profiles.map((profile) => (
+            <button
+              key={profile.id}
+              className={`profile-tab ${
+                editingProfileId === profile.id ? "is-editing" : ""
+              } ${profile.id === activeProfileId ? "is-active" : ""}`}
+              onClick={() => selectProfile(profile.id)}
+              type="button"
+            >
+              <span className="profile-tab-name">{profile.name}</span>
+              <span className="profile-tab-meta">
+                {providerLabels[profile.provider] ?? profile.provider} · {profile.model}
+              </span>
+              {profile.id === activeProfileId ? <span className="profile-tab-badge">当前</span> : null}
+            </button>
+          ))}
+          <button className="profile-tab profile-tab--add" onClick={handleAddProfile} type="button">
+            ＋ 新建配置
+          </button>
+        </div>
+        <div className="profile-actions-row">
+          <button
+            className="primary-button"
+            disabled={isSaving || editingProfileId === activeProfileId}
+            onClick={() => void handleActivate(editingProfileId)}
+            type="button"
+          >
+            {editingProfileId === activeProfileId ? "已是当前配置" : isSaving ? "切换中…" : "设为当前并立即生效"}
+          </button>
+          <button
+            className="secondary-button"
+            disabled={profiles.length <= 1 || editingProfileId === activeProfileId}
+            onClick={handleDeleteProfile}
+            type="button"
+          >
+            删除该配置
+          </button>
+          <span className="field-note">
+            「设为当前」立即保存并热切换（无需重启）；删除前请先切换到其他配置。
+          </span>
+        </div>
+      </div>
+
+      <div className="settings-section">
         <h3>1. 模型提供方</h3>
+        <label className="settings-field">
+          <span>正在编辑的配置</span>
+          <input
+            onChange={(event) => updateField("name", event.target.value)}
+            type="text"
+            value={form.name}
+          />
+        </label>
         <div className="tools-mode-options">
           {providerGroupOptions.map((option) => (
             <label
@@ -347,13 +538,13 @@ export function SettingsPanel(props: { onSettingsSaved: () => void }): ReactElem
             <span>模型（model）</span>
             <input
               onChange={(event) => updateField("model", event.target.value)}
-              placeholder={group === "local" ? "qwen2.5:7b" : "deepseek-chat"}
+              placeholder={group === "local" ? "qwen3.5:9b" : "deepseek-chat"}
               type="text"
               value={form.model}
             />
             <small className="field-note">
               {group === "local"
-                ? "Ollama 用 `ollama list` 里的名称"
+                ? "Ollama 用 `ollama list` 里的名称（默认 qwen3.5:9b）"
                 : "云端用服务商的模型名（如 deepseek-chat）"}
             </small>
           </label>
@@ -468,10 +659,10 @@ export function SettingsPanel(props: { onSettingsSaved: () => void }): ReactElem
             onClick={() => void handleSave()}
             type="button"
           >
-            {isSaving ? "保存中…" : "保存并立即生效"}
+            {isSaving ? "保存中…" : "保存全部配置并立即生效"}
           </button>
           <span className="field-note">
-            保存即热切换，无需重启服务；进行中的分析继续用旧配置，下一批自动用新配置。
+            保存全部配置并热切换至当前激活项，无需重启服务；进行中的分析继续用旧配置，下一批自动用新配置。
           </span>
         </div>
         <p className="field-note">

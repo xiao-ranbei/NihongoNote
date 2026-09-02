@@ -2291,3 +2291,86 @@ h2 {
   flex-wrap: wrap;
   gap: 0.8rem;
 }
+
+/* ============================================================
+   多配置槽位（2026-08-30，llm-settings-design.md 八章）
+   设置页「0. 已保存配置」：配置卡片 + 新建 / 设为当前 / 删除
+   ============================================================ */
+.profile-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.profile-tab {
+  align-items: stretch;
+  background: var(--panel-soft);
+  border: 1px solid var(--line-mid);
+  border-radius: 10px;
+  color: var(--ink-strong);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  font: inherit;
+  gap: 0.15rem;
+  max-width: 230px;
+  min-width: 150px;
+  padding: 0.55rem 0.7rem;
+  text-align: left;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+.profile-tab:hover {
+  border-color: var(--accent-bright);
+}
+.profile-tab.is-editing {
+  border-color: var(--accent-bright);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+.profile-tab.is-active {
+  background: var(--status-ok-bg);
+  border-color: var(--status-ok);
+}
+.profile-tab-name {
+  color: var(--ink-strong);
+  font-size: 0.85rem;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.profile-tab-meta {
+  color: var(--muted);
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.profile-tab-badge {
+  background: var(--status-ok-bg);
+  border-radius: 999px;
+  color: var(--status-ok);
+  font-size: 0.68rem;
+  font-weight: 700;
+  margin-top: 0.25rem;
+  padding: 0.1rem 0.5rem;
+  width: fit-content;
+}
+.profile-tab--add {
+  align-items: center;
+  color: var(--muted);
+  font-weight: 600;
+  justify-content: center;
+  min-width: 96px;
+}
+.profile-tab--add:hover {
+  color: var(--accent-bright);
+}
+.profile-actions-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+.profile-actions-row .field-note {
+  margin: 0;
+}
