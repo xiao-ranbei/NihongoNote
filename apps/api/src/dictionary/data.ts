@@ -5,7 +5,8 @@ import type { DictionaryEntry, SentenceEndingTemplate } from "./types.js";
  *
  * 覆盖三类：
  * 1. 助词（particle）—— 实测 TOP（の/を/が/て/と/に/か/ね/は…）全部在内，45 条；
- * 2. 功能词（functional）—— 助动词/补助动词/接续表达，33 条；
+ * 2. 功能词（functional 类别为主）—— 助动词/补助动词/接续表达/应答词，49 条
+ *    （其中 functional 47 + adverb 2；2026-09-02 补会话应答与接续词，见 dictionary-gap）；
  * 3. 句末语气模板 —— 16 条，供简单句的词典化兜底。
  *
  * 约束（verify-pipeline 会断言）：
@@ -411,6 +412,87 @@ export const functionalEntries: DictionaryEntry[] = [
   {
     surface: "ませんか", category: "functional", reading: null, gloss: "（劝诱）要不要…",
     explanation: "礼貌劝诱（要不要一起…）：一緒に食べませんか（要不要一起吃？）。",
+    confidence: 1, origin: "fixed"
+  },
+  // ── 会话应答与接续（2026-09-02 差距分析补充，语料：商务对话） ────────
+  {
+    surface: "はい", category: "functional", reading: null, gloss: "（应答）是/好的",
+    explanation: "①肯定应答：はい、そうです（是的）。②呼唤应答（在/到）：はい。③确认收到：はい、分かりました（好的，明白了）。",
+    confidence: 1, origin: "fixed"
+  },
+  {
+    surface: "そうですね", category: "functional", reading: null, gloss: "（应答）是呢/让我想想",
+    explanation: "①同意前缓冲或思考中回应：そうですね、来週でどうですか（嗯…下周怎么样）。②委婉同意：そうですね、そうしましょう（是啊，那就这么办吧）。",
+    confidence: 1, origin: "fixed"
+  },
+  {
+    surface: "なるほど", category: "functional", reading: null, gloss: "（应答）原来如此",
+    explanation: "听完解释后表示理解、恍然大悟：なるほど、そういうことですか（原来如此，是这么回事啊）。",
+    confidence: 1, origin: "fixed"
+  },
+  {
+    surface: "では", category: "functional", reading: null, gloss: "（接续）那么…",
+    explanation: "句首接续词，转换话题或推进对话：では、始めましょう（那么，开始吧）。注意区别于「ではありません」中的では。",
+    confidence: 1, origin: "fixed"
+  },
+  {
+    surface: "それでは", category: "functional", reading: null, gloss: "（接续）那么（郑重）",
+    explanation: "同「では」，比では更正式郑重，常用于总结后收尾：それでは、失礼します（那么，告辞了）。",
+    confidence: 1, origin: "fixed"
+  },
+  {
+    surface: "それで", category: "functional", reading: null, gloss: "（接续）那么/于是",
+    explanation: "①承接前述推进（那么/然后）：それで、どうしますか（那您打算怎么办？）。②表原因（所以）：雨が降った。それで行けなかった（下雨了，所以没能去）。",
+    confidence: 1, origin: "fixed"
+  },
+  {
+    surface: "しかし", category: "functional", reading: null, gloss: "（接续）但是",
+    explanation: "书面/正式转折：安いです。しかし、品質は良くない（便宜，但质量不好）。口语常用「でも」。",
+    confidence: 1, origin: "fixed"
+  },
+  {
+    surface: "したがって", category: "functional", reading: null, gloss: "（接续）因此",
+    explanation: "书面因果接续（因此/所以），比「だから」正式：コストが下がりました。したがって、価格も下げられます（成本降了，因此价格也能降）。",
+    confidence: 1, origin: "fixed"
+  },
+  {
+    surface: "どの", category: "functional", reading: null, gloss: "（连体）哪…/怎样的",
+    explanation: "连体词，修饰名词表疑问：どの本がいいですか（哪本书好？）。「どのような」＝怎样的：どのような業務ですか（是什么样的业务？）。",
+    confidence: 1, origin: "fixed"
+  },
+  {
+    surface: "同じ", category: "functional", reading: null, gloss: "（连体）相同的",
+    explanation: "连体词，表相同：同じ時間に会いましょう（在同一时间见面吧）。名词用法：同じだ（一样）。",
+    confidence: 1, origin: "fixed"
+  },
+  {
+    surface: "各", category: "functional", reading: null, gloss: "（连体）各…/每个…",
+    explanation: "连体词，修饰名词表逐一：各担当者に連絡します（联系各位负责人）。",
+    confidence: 1, origin: "fixed"
+  },
+  {
+    surface: "お", category: "functional", reading: null, gloss: "（敬语接头）",
+    explanation: "敬语接头词：①お+名词（郑重/尊敬）：お時間（您的时间）、お忙しい（您忙）。②お+动词连用形+する（自谦）：お願いします（拜托了）、お持ちします（我来拿）。",
+    confidence: 1, origin: "fixed"
+  },
+  {
+    surface: "よう", category: "functional", reading: null, gloss: "（比况）好像…",
+    explanation: "①样态/推测（ようだ）：雨が降るようです（好像要下雨）。②例示：東京のような都市（像东京这样的城市）。③「どのような/このような」中表样态（什么样的/这样的）。",
+    confidence: 1, origin: "fixed"
+  },
+  {
+    surface: "つ", category: "functional", reading: null, gloss: "（量词）…个",
+    explanation: "和语数词后的量词（一つ/二つ…）：要件は大きく2つに整理できます（需求大致能整理成两点）。也可计数非具体物件。",
+    confidence: 1, origin: "fixed"
+  },
+  {
+    surface: "実は", category: "adverb", reading: null, gloss: "其实",
+    explanation: "副词，引出之前未说的真实情况：実は、来月から海外赴任です（其实下个月起要外派海外）。",
+    confidence: 1, origin: "fixed"
+  },
+  {
+    surface: "まずは", category: "adverb", reading: null, gloss: "首先/先",
+    explanation: "副词「まず」+は 强调，表第一步先做：まずは営業部門内で進めましょう（先在公司内推进吧）。",
     confidence: 1, origin: "fixed"
   }
 ];
