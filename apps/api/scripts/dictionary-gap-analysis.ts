@@ -36,6 +36,8 @@ interface SurfaceStat {
   count: number;
   /** 第一处出现的原文段（截断），供撰写释义用 */
   example: string;
+  /** 出现过的文档 id 集合——用于算文档频率 df（跨语料复用度） */
+  documentIds: Set<string>;
 }
 
 interface CandidateGroup {
@@ -74,13 +76,20 @@ const contentPos = new Set([
 function bump(
   map: Map<string, SurfaceStat>,
   surface: string,
-  exampleText: string
+  exampleText: string,
+  documentId: string
 ): void {
   const existing = map.get(surface);
   if (existing) {
     existing.count += 1;
+    existing.documentIds.add(documentId);
   } else {
-    map.set(surface, { surface, count: 1, example: exampleText });
+    map.set(surface, {
+      surface,
+      count: 1,
+      example: exampleText,
+      documentIds: new Set([documentId])
+    });
   }
 }
 
@@ -93,14 +102,21 @@ async function buildGap(segments: SegmentRow[]): Promise<{
   content: Map<string, SurfaceStat>;
   candidates: CandidateGroup;
   totalUnmissed: number;
+  /** 语料 token 总数（含已命中），用于把「补 N 条」换算成覆盖率 pp */
+  totalTokens: number;
+  /** 语料文档数，df 的分母 */
+  docCount: number;
 }> {
   const content = new Map<string, SurfaceStat>();
   const candidates: CandidateGroup = { inScope: new Map(), fragment: new Map() };
+  const documentIds = new Set<string>();
   let totalUnmissed = 0;
+  let totalTokens = 0;
 
   for (const segment of segments) {
+    documentIds.add(segment.documentId);
     const boundaries = tokenizeJapanese(segment.text, segment.id);
-    const { llmBoundaries } = await prepareSegmentTokens(
+    const { localTokens, llmBoundaries } = await prepareSegmentTokens(
       {
         id: segment.id,
         documentId: segment.documentId,
@@ -114,6 +130,7 @@ async function buildGap(segments: SegmentRow[]): Promise<{
       } as never,
       boundaries
     );
+    totalTokens += localTokens.length + llmBoundaries.length;
     if (llmBoundaries.length === 0) {
       continue;
     }
@@ -127,7 +144,7 @@ async function buildGap(segments: SegmentRow[]): Promise<{
       totalUnmissed += 1;
 
       if (looksNumeric(surface)) {
-        bump(content, surface, example);
+        bump(content, surface, example, segment.documentId);
         continue;
       }
 
@@ -142,17 +159,17 @@ async function buildGap(segments: SegmentRow[]): Promise<{
         // partOfSpeech 形如「名詞-普通名詞」「助詞-格助詞」，取大类判定
         const posMain = wholeWord.partOfSpeech.split("-")[0] as string;
         if (contentPos.has(posMain)) {
-          bump(content, surface, example);
+          bump(content, surface, example, segment.documentId);
         } else {
-          bump(candidates.inScope, surface, example);
+          bump(candidates.inScope, surface, example, segment.documentId);
         }
       } else {
-        bump(candidates.fragment, surface, example);
+        bump(candidates.fragment, surface, example, segment.documentId);
       }
     }
   }
 
-  return { content, candidates, totalUnmissed };
+  return { content, candidates, totalUnmissed, totalTokens, docCount: documentIds.size };
 }
 
 function renderStat(map: Map<string, SurfaceStat>): string {
@@ -178,6 +195,69 @@ function summarize(
   const count = [...map.values()].reduce((sum, stat) => sum + stat.count, 0);
   const pct = totalUnmissed === 0 ? 0 : (count / totalUnmissed) * 100;
   return `  ${label}：${map.size} surface / ${count} token（占未命中 ${pct.toFixed(1)}%）`;
+}
+
+/**
+ * 内容词复用度分析（回答「内容词该不该进固定库」）。
+ *
+ * 真正的分界线不是「意思是否固定」——名词的意思同样固定——而是：
+ * - df（出现在几篇文档）：高 = 跨语料稳定的通用词；df=1 = 单篇专有，
+ *   换一篇就失效，补了只对本语料有效；
+ * - 词表规模 → 覆盖率曲线：手工补 N 条能拿多少 pp，边际收益一眼可见。
+ */
+function renderContentReuse(
+  content: Map<string, SurfaceStat>,
+  totalTokens: number,
+  docCount: number
+): string {
+  const stats = [...content.values()].sort((a, b) => b.count - a.count);
+  const lines: string[] = [];
+  lines.push("------------------------------------------------------------");
+  lines.push(`C1. 内容词跨文档复用度（df = 出现在几篇文档；语料共 ${docCount} 篇）`);
+  lines.push("------------------------------------------------------------");
+  for (let df = docCount; df >= 1; df -= 1) {
+    const group = stats.filter((stat) => stat.documentIds.size === df);
+    if (group.length === 0) {
+      continue;
+    }
+    const token = group.reduce((sum, stat) => sum + stat.count, 0);
+    const note = df === docCount
+      ? " ← 跨篇稳定，通用词候选"
+      : df === 1
+        ? " ← 单篇专有，换语料即失效"
+        : "";
+    lines.push(
+      `  df=${df}：${String(group.length).padStart(3)} surface / ${String(token).padStart(3)} token${note}`
+    );
+  }
+
+  lines.push("\n  【词表规模 → 覆盖率收益】（按频次降序取 top N，手工补条目）");
+  const checkpoints = [10, 20, 50, 100, stats.length].filter(
+    (n, index, arr) => n <= stats.length && arr.indexOf(n) === index
+  );
+  for (const n of checkpoints) {
+    const covered = stats.slice(0, n).reduce((sum, stat) => sum + stat.count, 0);
+    const pp = totalTokens === 0 ? 0 : (covered / totalTokens) * 100;
+    lines.push(
+      `  top ${String(n).padStart(3)} 条：+${pp.toFixed(1)} pp（${covered} token）` +
+      (n === stats.length ? "  ← 全部补完的天花板" : "")
+    );
+  }
+
+  const general = stats.filter((stat) => stat.documentIds.size >= 3);
+  lines.push(`\n  【df≥3 通用候选（${general.length} 条）】`);
+  if (general.length === 0) {
+    lines.push("  （无）");
+  } else {
+    const width = Math.max(...general.map((stat) => stat.surface.length), 4);
+    for (const stat of general) {
+      lines.push(
+        `  ${stat.surface.padEnd(width)}  ${String(stat.count).padStart(3)} 次  ${stat.documentIds.size}/${docCount} 篇`
+      );
+    }
+  }
+  lines.push("");
+  return lines.join("\n");
 }
 
 async function main(): Promise<void> {
@@ -238,6 +318,8 @@ async function main(): Promise<void> {
     lines.push("B. 分词 fragment（疑似固定表达，需人工复核后入句末模板/功能词）");
     lines.push("------------------------------------------------------------");
     lines.push(renderStat(gap.candidates.fragment));
+
+    lines.push(renderContentReuse(gap.content, gap.totalTokens, gap.docCount));
 
     lines.push("------------------------------------------------------------");
     lines.push("C. 内容词 TOP 40（固定库职责外，仅供了解语料构成）");
