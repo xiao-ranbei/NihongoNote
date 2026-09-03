@@ -3,6 +3,10 @@
  *
  *   pnpm --filter @nihongonote/api dictionary-coverage
  *
+ * 内容词数据源由 CONTENT_DICT_ID 控制（默认 none，不引入内容层；
+ * 设 jmdict-common 则叠加 JMdict 英文词库，覆盖率会明显上升）。
+ * 该开关与生产链路同源（apps/api/src/dictionary/content）。
+ *
  * 走真实数据库（apps/api/data/nihongonote.db），对每篇文章的每段
  * tokenizeJapanese + prepareSegmentTokens（与生产路径同源），统计：
  *   - 词典命中 token（source=dictionary, confidence=1.0）—— 永久免费
@@ -22,6 +26,10 @@ import {
   getDictionaryStats,
   getDictionaryVersion
 } from "../src/dictionary/lookup.js";
+import {
+  createContentDictionaryHolder
+} from "../src/dictionary/content/index.js";
+import type { ContentDictionaryProvider } from "../src/dictionary/content/types.js";
 
 import initSqlJs, { type Database as SqlJsDatabase } from "sql.js";
 
@@ -107,7 +115,8 @@ function formatPercent(ratio: number): string {
 
 async function buildReport(
   documents: DocRow[],
-  db: SqlJsDatabase
+  db: SqlJsDatabase,
+  contentDictionary: ContentDictionaryProvider | null
 ): Promise<GlobalReport> {
   const articles: ArticleCoverage[] = [];
   const unmissedCountBySurface = new Map<string, number>();
@@ -135,7 +144,8 @@ async function buildReport(
       const boundaries = tokenizeJapanese(segment.text, segment.id);
       const { localTokens, llmBoundaries } = await prepareSegmentTokens(
         { ...segment, documentId: doc.id, index: 0, startOffset: 0, endOffset: 0, speaker: null, errorMessage: null } as never,
-        boundaries
+        boundaries,
+        contentDictionary
       );
       const segTokens = localTokens.length + llmBoundaries.length;
       article.tokenCount += segTokens;
@@ -194,7 +204,7 @@ async function buildReport(
   };
 }
 
-function renderReport(report: GlobalReport): string {
+function renderReport(report: GlobalReport, activeContentDict: string): string {
   const lines: string[] = [];
   const { totals, dictionaryStats, dictionaryVersion } = report;
   lines.push("============================================================");
@@ -204,6 +214,7 @@ function renderReport(report: GlobalReport): string {
   lines.push(
     `固定用法库：助词 ${dictionaryStats.particles} · 功能词 ${dictionaryStats.functional} · 句末模板 ${dictionaryStats.endings} = ${dictionaryStats.total} 条`
   );
+  lines.push(`内容词数据源（CONTENT_DICT_ID）：${activeContentDict}`);
   lines.push("");
   lines.push("【总计】");
   lines.push(`  文章数：${totals.documents}`);
@@ -286,14 +297,17 @@ async function main(): Promise<void> {
   const SQL = await initSqlJs();
   const fileBuffer = fs.readFileSync(dbPath);
   const db = new SQL.Database(fileBuffer);
+  let activeContentDict = "none";
   try {
     const documents = loadDocuments(db);
     if (documents.length === 0) {
       console.error(`数据库 ${dbPath} 中无 documents，请先创建文章。`);
       process.exit(1);
     }
-    const report = await buildReport(documents, db);
-    console.log(renderReport(report));
+    const holder = await createContentDictionaryHolder(process.env.CONTENT_DICT_ID);
+    activeContentDict = holder.current.id;
+    const report = await buildReport(documents, db, holder.current);
+    console.log(renderReport(report, activeContentDict));
   } finally {
     db.close();
   }

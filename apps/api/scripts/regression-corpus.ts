@@ -6,6 +6,7 @@ import type { SegmentView, TokenCategory } from "@nihongonote/core";
 
 import { createDatabase } from "../src/db/database.js";
 import { createProviderRegistry } from "../src/providers/registry.js";
+import { createContentDictionaryHolder } from "../src/dictionary/content/index.js";
 import { DocumentRepository } from "../src/repositories/document-repository.js";
 import { AnalysisService } from "../src/services/analysis-service.js";
 import { measureSourceCoverage } from "../src/segmentation.js";
@@ -385,6 +386,7 @@ async function main(): Promise<void> {
   const service = new AnalysisService(
     repository,
     providers.llm,
+    await createContentDictionaryHolder(appConfig.contentDictId),
     appConfig.llmPromptVersion,
     appConfig.llmBatchSize,
     appConfig.llmBatchConcurrency

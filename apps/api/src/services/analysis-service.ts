@@ -18,6 +18,7 @@ import { DocumentRepository } from "../repositories/document-repository.js";
 import { packingSafetyRatio, planBatches } from "../llm-budget.js";
 import { estimateCost } from "../llm-pricing.js";
 import { prepareSegmentTokens } from "../segment-preparation.js";
+import type { ContentDictionaryHolder } from "../dictionary/content/index.js";
 import type {
   LlmAnalysisResult,
   LlmProvider,
@@ -153,6 +154,12 @@ export class AnalysisService {
      * 进行中的批次在下一个 batch 循环自然读到新 provider。
      */
     private readonly providerHolder: { current: LlmProvider },
+    /**
+     * 内容词词典层容器（设计文档 jmdict-integration-design.md）：
+     * 镜像 providerHolder，设置页后续热切换。默认 none（不加载索引），
+     * 行为与接入前完全一致（AC-01）。
+     */
+    private readonly contentDictionaryHolder: ContentDictionaryHolder,
     private readonly promptVersion: string,
     private readonly batchSize = 3,
     private readonly batchConcurrency = 2,
@@ -241,7 +248,11 @@ export class AnalysisService {
         continue; // 非 queued（已完成/失败）的句段跳过，保留现有结果
       }
       const boundaries = tokenizeJapanese(segment.text, segment.id);
-      const { localTokens } = await prepareSegmentTokens(segment, boundaries);
+      const { localTokens } = await prepareSegmentTokens(
+        segment,
+        boundaries,
+        this.contentDictionaryHolder.current
+      );
       const analysis = segmentAnalysisSchema.parse({
         segmentId: segment.id,
         translation: null,
@@ -299,7 +310,10 @@ export class AnalysisService {
       if (!document) {
         continue;
       }
-      const stats = await countSegmentTokens(document.segments);
+      const stats = await countSegmentTokens(
+        document.segments,
+        this.contentDictionaryHolder.current
+      );
       const estimate = estimateAnalysisTokens(document.segments.length, stats.unmissedTokens, segmentFields);
       const estimatedCost = estimatePreviewCost(this.providerHolder.current.model, estimate);
       documents.push({
@@ -415,7 +429,11 @@ export class AnalysisService {
     //    词典命中的 token 直接本地确定，不进入 LLM（零 token）。
     const prepared = await Promise.all(batch.map(async (segment, index) => {
       const boundaries = tokenBoundaries[index]!.tokens;
-      const { localTokens, llmBoundaries } = await prepareSegmentTokens(segment, boundaries);
+      const { localTokens, llmBoundaries } = await prepareSegmentTokens(
+        segment,
+        boundaries,
+        this.contentDictionaryHolder.current
+      );
       return { segment, boundaries, localTokens, llmBoundaries };
     }));
 

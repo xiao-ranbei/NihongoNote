@@ -55,6 +55,7 @@ import { prepareSegmentTokens } from "../src/segment-preparation.js";
 import {
   contentDictionaryConfidence,
   createContentDictionary,
+  createContentDictionaryHolder,
   FixtureContentDictionary,
   initializeContentDictionary,
   JmdictCommonProvider,
@@ -62,7 +63,8 @@ import {
   listContentDictionaryIds,
   NullContentDictionary,
   preferredGloss,
-  resolveContentDictionaryId
+  resolveContentDictionaryId,
+  type ContentDictionaryHolder
 } from "../src/dictionary/content/index.js";
 import type {
   ContentDictionaryProvider,
@@ -883,6 +885,9 @@ const mockProvider: LlmProvider = {
   }
 };
 
+// 注入 AnalysisService 用的空内容词典容器（verify 不启用真实数据源）
+const noContentDict: ContentDictionaryHolder = { current: new NullContentDictionary(), replace: () => {} };
+
 const threeLayerDir = path.resolve(process.cwd(), "data", "_verify");
 const threeLayerFile = path.join(threeLayerDir, "three-layer.db");
 fs.rmSync(threeLayerDir, { recursive: true, force: true });
@@ -893,7 +898,7 @@ const threeLayerDoc = threeLayerRepo.create({
   sourceText: "これは私の本です。",
   targetLevel: "auto"
 });
-const threeLayerService = new AnalysisService(threeLayerRepo, { current: mockProvider }, "v-test");
+const threeLayerService = new AnalysisService(threeLayerRepo, { current: mockProvider }, noContentDict, "v-test");
 threeLayerService.start(threeLayerDoc.id);
 
 let threeLayerProgress;
@@ -1096,7 +1101,7 @@ const toolsDoc = toolsRepo.create({
   sourceText: "これは私の本です。",
   targetLevel: "auto"
 });
-const toolsService = new AnalysisService(toolsRepo, { current: mockProvider }, "v-test");
+const toolsService = new AnalysisService(toolsRepo, { current: mockProvider }, noContentDict, "v-test");
 const dictOnlyProgress = await toolsService.startDictionaryOnly(toolsDoc.id);
 const dictOnlyRows = toolsDb.all<{ result_json: string; usage_json: string | null; provider: string; model: string }>(
   "SELECT result_json, usage_json, provider, model FROM segment_analyses"
@@ -1789,6 +1794,33 @@ if (fs.existsSync(realJmdictPath)) {
   });
 }
 fs.unlinkSync(tmpJmdict);
+
+console.log("=== 内容词典：激活容器（CONTENT_DICT_ID 驱动，主链路接入）===");
+// 验证「数据源经 env 解析 + 安全初始化，注入 AnalysisService」这条激活路径：
+// 默认 none ⇒ 不加载索引、行为不变（AC-01）；设 jmdedict-common ⇒ 加载真实索引。
+const holderDefault = await createContentDictionaryHolder(undefined);
+const holderJmd = await createContentDictionaryHolder("jmdict-common");
+
+check("内容词典：激活容器默认 none（CONTENT_DICT_ID 未设 → 不加载，AC-01）", () => {
+  assert.ok(
+    holderDefault.current instanceof NullContentDictionary,
+    "未设 CONTENT_DICT_ID 应为 none，不加载任何索引"
+  );
+  return "默认 → none，行为与接入前完全一致";
+});
+check("内容词典：激活容器按 env 加载 jmdedict-common（端到端激活）", () => {
+  if (fs.existsSync(realJmdictPath)) {
+    assert.ok(holderJmd.current.ready(), "索引存在时应就绪");
+    const hit = holderJmd.current.lookup({ surface: "時間" });
+    assert.ok(hit && hit.glosses.some((g) => g.text === "time"), "時間→time");
+    return "CONTENT_DICT_ID=jmdict-common → 真实索引加载就绪，可注入主链路";
+  }
+  assert.ok(
+    holderJmd.current instanceof NullContentDictionary,
+    "索引缺失时静默回落 none（AC-05）"
+  );
+  return "索引缺失 → 静默回落 none（AC-05）";
+});
 
 console.log("");
 let failed = 0;

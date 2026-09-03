@@ -45,6 +45,37 @@ export function listContentDictionaryIds(): string[] {
 }
 
 /**
+ * 可变数据源容器（镜像 LlmProviderHolder）：
+ * 设置页后续保存后热切换，进行中的批次在下一个 batch 循环自然读到新 provider。
+ */
+export interface ContentDictionaryHolder {
+  current: ContentDictionaryProvider;
+  /** 热切换：保存设置后替换当前 provider（未来设置页 UI 用）。 */
+  replace(next: ContentDictionaryProvider): void;
+}
+
+/**
+ * 构建并安全初始化数据源容器（异步：首次需读取索引文件，只发生一次）。
+ *
+ * 解析顺序：env CONTENT_DICT_ID（数据库 contentDictionary 键待设置页 UI 接入后补）。
+ * 默认 none ⇒ 不加载任何索引，行为与接入前完全一致（AC-01）。
+ * 索引缺失/损坏由 initializeContentDictionary 静默回落 Null（AC-05）。
+ */
+export async function createContentDictionaryHolder(
+  envValue?: string | null
+): Promise<ContentDictionaryHolder> {
+  const id = resolveContentDictionaryId(undefined, envValue);
+  const provider = await initializeContentDictionary(createContentDictionary(id));
+  const holder: ContentDictionaryHolder = {
+    current: provider,
+    replace(next: ContentDictionaryProvider): void {
+      holder.current = next;
+    }
+  };
+  return holder;
+}
+
+/**
  * 安全初始化：数据源损坏/缺失时回落空实现。
  *
  * 设计约束（AC-05）：加载失败**必须**静默降级，绝不阻断分析。

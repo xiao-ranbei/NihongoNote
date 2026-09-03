@@ -203,10 +203,30 @@ CREATE TABLE vocabulary_cache (
 ### 6.3 不做（等数据源/决策确定后）
 
 - **中文释义链路**：`vocabulary_cache` 表 + 本地译中（按需 Ollama，需 LLM-011 批准）
-- 设置页 UI、前端徽标（切换/展示数据源）
+- **设置页 UI / 前端徽标**：仍待做；但激活无需等设置页——已可通过 `CONTENT_DICT_ID` 环境变量直接启用（见 6.4）
 - jmnedict 专名、jmdict 全量（增量小、收益低，倾向不做）
-- **覆盖率指标**：当前内容层未接入运行中的分析服务（无设置页启用），项目覆盖率基线仍 47.8%；
-  待设置页启用 jmdedict-common 后，本语料覆盖率预计约 80%（86.6% × 内容词占比），届时复核
+- **覆盖率指标（已实测，2026-09-03 续）**：内容层经 6.4 接入运行链路后，本语料（914 token）
+  实测从 47.8% 升至 **92.7%**（847/914 命中，其中 410 来自 `word` 内容层）；
+  剩余 67 多为数字 / 人名（田中、李）/ 缩写（IT），JMdict 本就不含，属预期。
+
+### 6.4 运行链路接入（已完成 2026-09-03 续）
+
+**做**（用户「继续」指令：把 6.2 的适配器真正接入运行中的分析服务，配置门控、默认行为不变）：
+
+1. `config.ts` —— 新增 `CONTENT_DICT_ID` 环境变量 → `appConfig.contentDictId`
+2. `dictionary/content/index.ts` —— 新增 `ContentDictionaryHolder`（镜像 `LlmProviderHolder`，
+   含 `replace()` 预留设置页热切换）+ 异步工厂 `createContentDictionaryHolder(envValue?)`；
+   解析顺序 `db contentDictionary 键（待设置页接入）→ env → 默认 none`
+3. `analysis-service.ts` —— 三处注入 `this.contentDictionaryHolder.current`：
+   `startDictionaryOnly`（句段准备）、`previewAnalysis`（预览统计）、`processBatch`（真实批处理）
+4. `analysis-preview.ts` —— `countSegmentTokens` 透传可选的 `contentDictionary`
+5. `app.ts` —— `createApp` 内 `await createContentDictionaryHolder(config.contentDictId)` 并注入 `AnalysisService`
+6. `verify-pipeline.ts` —— 修正一处声明顺序错误；新增 2 条激活断言
+   （默认 none 不加载索引 ≡ 接入前 / env=jmdict-common 真实索引就绪可注入主链路）；全量 **112/112 通过**
+7. `dictionary-coverage.ts` —— 接受 `CONTENT_DICT_ID`，可量测真实覆盖率（零 LLM）
+
+**代价**：默认 `none` 时仅多一次 `createContentDictionaryHolder` 异步解析，无索引读取、零行为变化（AC-01）；
+设 `jmdict-common` 时首次加载 ~9.3 MB 索引（一次性、单例），不发起任何 LLM 请求（AC-06）。
 
 ---
 

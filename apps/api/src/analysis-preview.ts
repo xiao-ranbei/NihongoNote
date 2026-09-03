@@ -2,6 +2,7 @@ import type { Segment, SegmentFieldProfile } from "@nihongonote/core";
 
 import { estimateCost } from "./llm-pricing.js";
 import { prepareSegmentTokens } from "./segment-preparation.js";
+import type { ContentDictionaryProvider } from "./dictionary/content/types.js";
 import { tokenizeJapanese } from "./tokenization.js";
 
 /**
@@ -86,12 +87,15 @@ export interface AnalysisTokenEstimate {
  *
  * 注意：形态素分析（kuromoji）在模块内是单例，多篇文章预览只初始化一次。
  */
-export async function countSegmentTokens(segments: Segment[]): Promise<TokenStats> {
+export async function countSegmentTokens(
+  segments: Segment[],
+  contentDictionary?: ContentDictionaryProvider | null
+): Promise<TokenStats> {
   let totalTokens = 0;
   let matchedTokens = 0;
   for (const segment of segments) {
     const boundaries = tokenizeJapanese(segment.text, segment.id);
-    const { localTokens } = await prepareSegmentTokens(segment, boundaries);
+    const { localTokens } = await prepareSegmentTokens(segment, boundaries, contentDictionary);
     totalTokens += boundaries.length;
     matchedTokens += localTokens.length;
   }

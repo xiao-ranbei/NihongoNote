@@ -67,7 +67,8 @@ const environmentSchema = z.object({
   TTS_VOICE: optionalStringSchema,
   TTS_SPEED: optionalPositiveNumberSchema,
   TTS_FORMAT: optionalStringSchema,
-  TTS_SSML_VERSION: optionalStringSchema
+  TTS_SSML_VERSION: optionalStringSchema,
+  CONTENT_DICT_ID: optionalStringSchema
 });
 
 const environment = environmentSchema.parse(process.env);
@@ -101,7 +102,8 @@ export const appConfig = {
   ttsVoice: environment.TTS_VOICE,
   ttsSpeed: environment.TTS_SPEED,
   ttsFormat: environment.TTS_FORMAT,
-  ttsSsmlVersion: environment.TTS_SSML_VERSION
+  ttsSsmlVersion: environment.TTS_SSML_VERSION,
+  contentDictId: environment.CONTENT_DICT_ID
 } as const;
 
 export type AppConfig = typeof appConfig;
