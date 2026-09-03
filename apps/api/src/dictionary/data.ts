@@ -5,8 +5,9 @@ import type { DictionaryEntry, SentenceEndingTemplate } from "./types.js";
  *
  * 覆盖三类：
  * 1. 助词（particle）—— 实测 TOP（の/を/が/て/と/に/か/ね/は…）全部在内，45 条；
- * 2. 功能词（functional 类别为主）—— 助动词/补助动词/接续表达/应答词，49 条
- *    （其中 functional 47 + adverb 2；2026-09-02 补会话应答与接续词，见 dictionary-gap）；
+ * 2. 功能词（functional 类别为主）—— 助动词/补助动词/接续表达/应答词/寒暄，56 条
+ *    （其中 functional 53 + adverb 3；2026-09-02 补会话应答与接续词、
+ *     2026-09-03 补寒暄客套，均见 dictionary-gap 差距分析）；
  * 3. 句末语气模板 —— 16 条，供简单句的词典化兜底。
  *
  * 约束（verify-pipeline 会断言）：
@@ -493,6 +494,42 @@ export const functionalEntries: DictionaryEntry[] = [
   {
     surface: "まずは", category: "adverb", reading: null, gloss: "首先/先",
     explanation: "副词「まず」+は 强调，表第一步先做：まずは営業部門内で進めましょう（先在公司内推进吧）。",
+    confidence: 1, origin: "fixed"
+  },
+  // ── 寒暄与客套（2026-09-03 补，差距分析 B 类中的完整独立 token） ──────────
+  {
+    surface: "承知しました", category: "functional", reading: null, gloss: "（应答）知道了/明白了",
+    explanation: "商务应答，比分かりました更郑重的「明白了/收到」：承知しました。すぐに対応いたします（明白了，我马上处理）。",
+    confidence: 1, origin: "fixed"
+  },
+  {
+    surface: "初めまして", category: "functional", reading: null, gloss: "（寒暄）初次见面",
+    explanation: "初次见面的固定寒暄，后接自我介绍：初めまして、李と申します（初次见面，我姓李）。常与よろしくお願いします连用。",
+    confidence: 1, origin: "fixed"
+  },
+  {
+    surface: "いただきます", category: "functional", reading: null, gloss: "（寒暄/自谦）我开动了；承蒙…",
+    explanation: "①用餐前寒暄（我开动了）：いただきます。②「て形+いただきます」表自谦受益，承蒙对方让自己做某事：伺わせていただきます（承蒙允许我前去拜访）。",
+    confidence: 1, origin: "fixed"
+  },
+  {
+    surface: "お間違い", category: "functional", reading: null, gloss: "（礼貌）错误；没错吧",
+    explanation: "お+間違い：①礼貌地指出对方有误：お間違いではありませんか（您是不是弄错了？）。②常见于确认句お間違いないですか（没搞错吧？）。",
+    confidence: 1, origin: "fixed"
+  },
+  {
+    surface: "件あたり", category: "functional", reading: null, gloss: "（量词）每…件",
+    explanation: "接在数量后表「每一…」：1件あたり2時間かかります（每件要2小时）。同类：一人あたり（人均）。",
+    confidence: 1, origin: "fixed"
+  },
+  {
+    surface: "ですが", category: "functional", reading: null, gloss: "（接续）虽然…；那个…",
+    explanation: "①转折（虽然…但是）：安いですが、品質は普通です（便宜，但质量一般）。②句末铺垫，委婉引出请求或疑问：確認したいのですが（我想确认一下…）。",
+    confidence: 1, origin: "fixed"
+  },
+  {
+    surface: "よろしく", category: "adverb", reading: null, gloss: "（副词）请多关照",
+    explanation: "副词よろしく，用于寒暄或委托：よろしくお願いします（请多关照）。也可单独用于转达问候：田中さんによろしく（代我向田中问好）。",
     confidence: 1, origin: "fixed"
   }
 ];
