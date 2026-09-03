@@ -16,6 +16,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -56,6 +57,7 @@ import {
   createContentDictionary,
   FixtureContentDictionary,
   initializeContentDictionary,
+  JmdictCommonProvider,
   joinGlosses,
   listContentDictionaryIds,
   NullContentDictionary,
@@ -1714,6 +1716,79 @@ check("内容词典：固定库规模未变（AC-08 回归基线不退化）", (
   );
   return `助词 ${stats.particles} / 功能词 ${stats.functional} / 句末 ${stats.endings}`;
 });
+
+console.log("=== 内容词典：jmdedict-common 真实数据源适配器（AC-07 端到端）===");
+// 验证「新增数据源 = 实现接口 + 注册表加一行，主链路零改动」这条路径真实可用。
+// 不依赖 9MB 真实索引做断言（保持 verify 自包含），用临时精简索引验证同一代码路径。
+const tmpJmdict = path.join(os.tmpdir(), `jmdict-test-${Date.now()}.json`);
+fs.writeFileSync(
+  tmpJmdict,
+  JSON.stringify({
+    version: "test-1",
+    source: "jmdict",
+    license: "CC BY-SA 3.0 (EDRDG)",
+    entries: {
+      時間: { r: "じかん", p: ["名詞"], g: [{ l: "en", t: "time" }, { l: "en", t: "hours" }] },
+      かかる: { r: "かかる", p: ["動詞"], g: [{ l: "en", t: "to take (time)" }] }
+    }
+  })
+);
+const jmdictTest = new JmdictCommonProvider({ indexPath: tmpJmdict });
+await jmdictTest.initialize();
+
+const prepJmd = await prepareSegmentTokens(
+  contentSegment("c:jmd", "時間です。"),
+  tokenizeJapanese("時間です。", "c:jmd"),
+  jmdictTest
+);
+const safeJmd = await initializeContentDictionary(
+  new JmdictCommonProvider({ indexPath: "/no/such/jmdict-index.json" })
+);
+
+check("内容词典：jmdedict-common surface 直击 + 英文释义", () => {
+  const hit = jmdictTest.lookup({ surface: "時間" });
+  assert.ok(hit, "時間应命中");
+  assert.equal(hit!.matchedBy, "surface");
+  assert.equal(hit!.reading, "じかん");
+  assert.deepEqual(hit!.partsOfSpeech, ["名詞"]);
+  const gloss = preferredGloss(hit!);
+  assert.ok(gloss, "应有首选释义");
+  assert.equal(gloss!.lang, "en", "当前仅英文释义（JMdict 官方多语不含中文）");
+  assert.equal(gloss!.text, "time");
+  return "時間 → じかん / 名詞 / time（en）";
+});
+check("内容词典：jmdedict-common 接入第四层后内容词走本地（端到端）", () => {
+  const timeHit = prepJmd.localTokens.find((token) => token.surface === "時間");
+  assert.ok(timeHit, "時間应被内容层本地命中");
+  assert.equal(timeHit!.category, "word");
+  assert.equal(timeHit!.confidence, 0.8);
+  assert.equal(prepJmd.llmBoundaries.length, 0, "全部命中，无 LLM 候选");
+  return "時間 → word/0.8；llm=0（验证第四层真实可用）";
+});
+check("内容词典：jmdedict-common 索引缺失静默降级（AC-05，真实数据源路径）", () => {
+  assert.ok(safeJmd instanceof NullContentDictionary, "缺失应回落 Null");
+  return "缺索引 → Null，分析不中断";
+});
+
+// 真实索引若已构建（data/jmdict-common-index.json，gitignore），做一次抽样核对
+const realJmdictPath = fileURLToPath(new URL("../data/jmdict-common-index.json", import.meta.url));
+if (fs.existsSync(realJmdictPath)) {
+  const realJmdict = new JmdictCommonProvider();
+  await realJmdict.initialize();
+  check("内容词典：jmdedict-common 真实索引抽样（data/ 索引已构建）", () => {
+    assert.ok(realJmdict.ready(), "真实索引应就绪");
+    const t = realJmdict.lookup({ surface: "時間" });
+    assert.ok(t && t.surface === "時間" && t.glosses.some((g) => g.text === "time"), "時間→time");
+    const e = realJmdict.lookup({ surface: "営業" });
+    assert.ok(e && e.glosses.some((g) => /business/i.test(g.text)), "営業→business");
+    const b = realJmdict.lookup({ surface: "本" });
+    assert.ok(b, "本应被收录");
+    const k = realJmdict.lookup({ surface: "かかって", lemma: "かかる" });
+    assert.ok(k && k.matchedBy === "lemma" && k.surface === "かかる", "かかって→かかる(lemma)");
+    return `真实索引就绪：${realJmdict.stats().entries} 表面键 / v${realJmdict.stats().version}`;
+  });
+}
+fs.unlinkSync(tmpJmdict);
 
 console.log("");
 let failed = 0;

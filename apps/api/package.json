@@ -10,7 +10,8 @@
     "verify": "tsx scripts/verify-pipeline.ts",
     "regression": "tsx scripts/regression-corpus.ts",
     "dictionary-coverage": "tsx scripts/dictionary-coverage.ts",
-    "dictionary-gap": "tsx scripts/dictionary-gap-analysis.ts"
+    "dictionary-gap": "tsx scripts/dictionary-gap-analysis.ts",
+    "build:jmdict-index": "tsx scripts/build-jmdict-index.ts"
   },
   "dependencies": {
     "@nihongonote/core": "workspace:*",

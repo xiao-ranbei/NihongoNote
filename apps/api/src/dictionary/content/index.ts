@@ -1,10 +1,12 @@
 import type { ContentDictionaryProvider } from "./types.js";
 import { NullContentDictionary } from "./null-provider.js";
 import { FixtureContentDictionary } from "./fixture-provider.js";
+import { JmdictCommonProvider } from "./jmdict-common-provider.js";
 
 export * from "./types.js";
 export { NullContentDictionary } from "./null-provider.js";
 export { FixtureContentDictionary } from "./fixture-provider.js";
+export { JmdictCommonProvider } from "./jmdict-common-provider.js";
 
 /**
  * 数据源注册表。
@@ -12,14 +14,15 @@ export { FixtureContentDictionary } from "./fixture-provider.js";
  * 新增数据源只需两步：实现 ContentDictionaryProvider + 在这里注册，
  * 主链路（segment-preparation / analysis-service）零改动。
  *
- * 已调研待实现（见 docs/jmdict-integration-design.md 第四节）：
- *   jmdict-common  — zip 1.37 MB，实测覆盖内容词 86.6%，英文释义（CC BY-SA 3.0）
- *   jmdict-full    — zip 11 MB，全量 21 万条目
+ * 已接入 / 待实现（见 docs/jmdict-integration-design.md 第四节）：
+ *   jmdict-common  — ✅ 已实现（scripts/build-jmdict-index.ts 预构建索引，英文释义）
  *   jmnedict       — 专名 74 万条（收益仅 11 token，倾向不做）
+ *   中文资源        — 待用户自行寻找（kaikki zhwiktionary 体积过大且未分语言）
  */
 const registry: Record<string, () => ContentDictionaryProvider> = {
   none: () => new NullContentDictionary(),
-  fixture: () => new FixtureContentDictionary()
+  fixture: () => new FixtureContentDictionary(),
+  "jmdict-common": () => new JmdictCommonProvider()
 };
 
 /** 数据源 id 来源：app_settings 的 contentDictionary 键 → env CONTENT_DICT_ID → 默认 none。 */

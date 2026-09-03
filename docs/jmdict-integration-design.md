@@ -1,10 +1,11 @@
 # 内容词词典层设计（可插拔数据源）
 
-> 状态：**接口层已实施，数据源待定**（2026-09-03 修订）
+> 状态：**接口层已实施；jmdedict-common（英文）适配器已落地并验证**（2026-09-03 修订）
 > 决策（用户拍板）：**先做标准化接口，具体字典数据等后续寻找资源**。
 > 因此本设计的核心是「与数据源解耦的词典层契约」，已调研的数据源只作为
 > 待实现的适配器登记在案，不绑定到主链路。
-> 全部结论基于本地实测，零云端调用。
+> 全部结论基于本地实测，零云端调用。英文 jmdedict 适配器已按「实现接口 + 注册表加一行」
+> 的方式接入，验证了主链路零改动；**中文释义仍待用户寻找资源**（见第八节）。
 
 ---
 
@@ -135,7 +136,7 @@ createContentDictionary(config?: { id?: string; indexPath?: string }): ContentDi
 
 | 数据源 | 体积 | 词条 | 覆盖/特点 | 许可 | 状态 |
 | --- | --- | --- | --- | --- | --- |
-| **jmdict-eng-common** | zip 1.37 MB / JSON 16.5 MB | 50,687 键 | 实测覆盖 86.6%，英文释义 | CC BY-SA 3.0（EDRDG，需署名） | 待实现 |
+| **jmdict-eng-common** | zip 1.37 MB / JSON 16.5 MB | 22,637 词 → **50,687 表面键**（已索引 kanji+kana） | 实测覆盖内容词 86.6%，英文释义 | CC BY-SA 3.0（EDRDG，需署名） | **✅ 已实现（英文）** |
 | jmdict-eng（全量） | zip 11 MB / JSON ~100 MB | ~21 万 | 补生僻词/部分外来语，增量小 | 同上 | 待定 |
 | JMnedict（专名） | 单独发布 | 74 万 | 补人名（收益仅 11 token） | 同上 | 倾向不做 |
 | **中文维基词典** via kaikki.org | gz **214 MB** / 1.8 GB | 未知 | 唯一开源**日→中**来源；**未按语言拆分**，需流式过滤；官方标注提取仍在完善 | CC BY-SA | 待用户评估 |
@@ -174,23 +175,38 @@ CREATE TABLE vocabulary_cache (
 
 ---
 
-## 六、本次实施范围（接口层）
+## 六、本次实施范围
+
+### 6.1 接口层（已完成 2026-09-03）
 
 **做**：
 
 1. `dictionary/content/types.ts` —— 上述契约与类型
 2. `dictionary/content/null-provider.ts` —— 默认空实现
 3. `dictionary/content/fixture-provider.ts` —— 测试用样例实现
-4. `dictionary/content/index.ts` —— 工厂 + 回落逻辑
+4. `dictionary/content/index.ts` —— 工厂 + 回落逻辑 + 注册表（none / fixture / jmdict-common）
 5. `segment-preparation.ts` —— 支持可选第四层参数（**不传则行为完全不变**）
-6. `verify-pipeline.ts` —— 接口契约与降级行为断言
+6. `verify-pipeline.ts` —— 接口契约与降级行为断言（AC-01..AC-08）
 
-**不做**（等数据源确定后）：
+### 6.2 jmdedict-common 英文适配器（已完成 2026-09-03）
 
-- 任何真实数据源的下载/索引构建脚本
-- `vocabulary_cache` 表与译中链路
-- 设置页 UI、前端徽标
-- 覆盖率提升（未接数据源前指标不变）
+**做**（验证「新增数据源 = 实现接口 + 注册表加一行，主链路零改动」这条路径真实可用）：
+
+7. `dictionary/content/jmdict-common-provider.ts` —— JMdict 常用词（英文）实现 `ContentDictionaryProvider`
+8. `scripts/build-jmdict-index.ts` —— 预构建精简索引：
+   - 输入 `jmdict-eng-common` JSON（CC BY-SA 3.0），输出 `apps/api/data/jmdict-common-index.json`
+   - 22,637 词 → 50,687 表面键（kanji+kana 双索引），体积 **~9.3 MB**
+   - 数据文件位于 `data/`（已被 `**/data/` gitignore），**不入库**
+   - 运行：`pnpm --filter @nihongonote/api build:jmdict-index`
+9. `verify-pipeline.ts` 新增 4 条真实数据源端到端断言（surface 直击 / 第四层命中 / 缺失降级 / 真实索引抽样含 lemma 回退）
+
+### 6.3 不做（等数据源/决策确定后）
+
+- **中文释义链路**：`vocabulary_cache` 表 + 本地译中（按需 Ollama，需 LLM-011 批准）
+- 设置页 UI、前端徽标（切换/展示数据源）
+- jmnedict 专名、jmdict 全量（增量小、收益低，倾向不做）
+- **覆盖率指标**：当前内容层未接入运行中的分析服务（无设置页启用），项目覆盖率基线仍 47.8%；
+  待设置页启用 jmdedict-common 后，本语料覆盖率预计约 80%（86.6% × 内容词占比），届时复核
 
 ---
 
