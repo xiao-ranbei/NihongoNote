@@ -350,6 +350,52 @@ export function saveLlmSettings(input: LlmSettingsInput): Promise<LlmSettingsSta
   );
 }
 
+/* ---------------- 内容词数据源设置（§6.5 阶段 A） ---------------- */
+
+export interface ContentDictionarySourceState {
+  id: string;
+  label: string;
+  ready: boolean;
+  stats: {
+    entries: number;
+    loaded: boolean;
+    version: string | null;
+    license: string | null;
+  } | null;
+}
+
+export interface ContentDictionarySettingsState {
+  current: ContentDictionarySourceState;
+  available: Array<{ id: string; label: string }>;
+}
+
+function parseContentDictionarySettingsState(payload: unknown): ContentDictionarySettingsState {
+  if (typeof payload !== "object" || payload === null || !("current" in payload)) {
+    throw new Error("内容词典设置返回格式不正确");
+  }
+  return payload as ContentDictionarySettingsState;
+}
+
+export function getContentDictionarySettings(): Promise<ContentDictionarySettingsState> {
+  return request(
+    "/api/content-dictionary/settings",
+    { method: "GET" },
+    parseContentDictionarySettingsState
+  );
+}
+
+export function saveContentDictionarySettings(input: { id: string }): Promise<ContentDictionarySettingsState> {
+  return request(
+    "/api/content-dictionary/settings",
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input)
+    },
+    parseContentDictionarySettingsState
+  );
+}
+
 /** 仅供工具页校验 mode 值（与 core 契约保持一致）。 */
 export { analysisModeSchema };
 export type { AnalysisMode, AnalysisPreview };

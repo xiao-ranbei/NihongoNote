@@ -66,6 +66,11 @@ import {
   resolveContentDictionaryId,
   type ContentDictionaryHolder
 } from "../src/dictionary/content/index.js";
+import {
+  loadContentDictionarySettings,
+  parseContentDictionarySettings,
+  saveContentDictionarySettings
+} from "../src/content-dictionary-settings.js";
 import type {
   ContentDictionaryProvider,
   ContentLookupQuery
@@ -1821,6 +1826,56 @@ check("内容词典：激活容器按 env 加载 jmdedict-common（端到端激�
   );
   return "索引缺失 → 静默回落 none（AC-05）";
 });
+
+console.log("");
+console.log("=== 内容词典：设置页后端（零 LLM，§6.5 阶段 A）===");
+// 解析校验：只接受注册表中的真实源（fixture 测试专用不暴露）
+check("内容词典：设置解析只接受已注册真实源", () => {
+  assert.doesNotThrow(() => parseContentDictionarySettings({ id: "none" }), "none 合法");
+  assert.doesNotThrow(() => parseContentDictionarySettings({ id: "jmdict-common" }), "jmdict-common 合法");
+  assert.throws(() => parseContentDictionarySettings({ id: "fixture" }), "fixture 不暴露给设置页");
+  assert.throws(() => parseContentDictionarySettings({ id: "bogus" }), "未知 id 拒绝");
+  return "none/jmdict-common 通过；fixture/bogus 拒绝";
+});
+
+// db 值优先于 env（热切换前置）：createContentDictionaryHolder(dbValue, envValue)
+const holderDbWins = await createContentDictionaryHolder("jmdict-common", "none");
+const holderEnvFallback = await createContentDictionaryHolder(null, "jmdict-common");
+check("内容词典：设置页 db 值优先于 env（热切换前置）", () => {
+  assert.equal(holderDbWins.current.id, "jmdict-common", "db=jmdict-common 应覆盖 env=none");
+  assert.equal(holderEnvFallback.current.id, "jmdict-common", "db 空时回退 env");
+  return "db 优先于 env，env 为空回退 none";
+});
+
+// 热切换：replace() 改变 current（mirror LlmProviderHolder）
+const swapHolder: ContentDictionaryHolder = {
+  current: new NullContentDictionary(),
+  replace(next: ContentDictionaryProvider): void { swapHolder.current = next; }
+};
+check("内容词典：holder.replace() 热切换改变 current", () => {
+  const before = swapHolder.current.id;
+  swapHolder.replace(createContentDictionary("jmdict-common"));
+  assert.notEqual(swapHolder.current.id, before, "替换后应指向新 provider");
+  assert.equal(swapHolder.current.id, "jmdict-common");
+  return "replace() 生效，进行中批次下一循环自然读到新源";
+});
+
+// 设置存储往返：写库 → 读库
+const cdSettingsDir = path.resolve(process.cwd(), "data", "_verify_cd");
+const cdSettingsFile = path.join(cdSettingsDir, "cd.db");
+fs.rmSync(cdSettingsDir, { recursive: true, force: true });
+const cdSettingsDb = await createDatabase(cdSettingsFile);
+check("内容词典：设置写库/读库往返一致", () => {
+  saveContentDictionarySettings(cdSettingsDb, { id: "jmdict-common" });
+  const loaded = loadContentDictionarySettings(cdSettingsDb);
+  assert.ok(loaded && loaded.id === "jmdict-common", "读回应与写入一致");
+  saveContentDictionarySettings(cdSettingsDb, { id: "none" });
+  const loadedNone = loadContentDictionarySettings(cdSettingsDb);
+  assert.ok(loadedNone && loadedNone.id === "none", "可切回 none");
+  return "写库/读库往返一致（key=contentDictionary）";
+});
+cdSettingsDb.close();
+fs.rmSync(cdSettingsDir, { recursive: true, force: true });
 
 console.log("");
 let failed = 0;

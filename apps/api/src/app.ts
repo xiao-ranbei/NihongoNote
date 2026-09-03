@@ -7,9 +7,11 @@ import { createContentDictionaryHolder } from "./dictionary/content/index.js";
 import { DocumentRepository } from "./repositories/document-repository.js";
 import { AnalysisService } from "./services/analysis-service.js";
 import { registerAnalysisRoutes } from "./routes/analysis.js";
+import { registerContentDictionaryRoutes } from "./routes/content-dictionary.js";
 import { registerDocumentRoutes } from "./routes/documents.js";
 import { registerHealthRoutes } from "./routes/health.js";
 import { registerLlmRoutes } from "./routes/llm.js";
+import { loadContentDictionarySettings } from "./content-dictionary-settings.js";
 
 export async function createApp(config: AppConfig): Promise<FastifyInstance> {
   const app = Fastify({
@@ -19,7 +21,11 @@ export async function createApp(config: AppConfig): Promise<FastifyInstance> {
   const database = await createDatabase(config.databaseFile);
   const repository = new DocumentRepository(database);
   repository.recoverInterruptedAnalyses();
-  const contentDictionary = await createContentDictionaryHolder(config.contentDictId);
+  const contentDictionarySettings = loadContentDictionarySettings(database);
+  const contentDictionary = await createContentDictionaryHolder(
+    contentDictionarySettings?.id ?? null,
+    config.contentDictId
+  );
   const analysisService = new AnalysisService(
     repository,
     providers.llm,
@@ -38,6 +44,10 @@ export async function createApp(config: AppConfig): Promise<FastifyInstance> {
     config,
     database,
     analysisService
+  });
+  registerContentDictionaryRoutes(app, {
+    holder: contentDictionary,
+    database
   });
 
   app.addHook("onClose", async () => {

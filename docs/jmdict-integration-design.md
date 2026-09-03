@@ -228,6 +228,38 @@ CREATE TABLE vocabulary_cache (
 **代价**：默认 `none` 时仅多一次 `createContentDictionaryHolder` 异步解析，无索引读取、零行为变化（AC-01）；
 设 `jmdict-common` 时首次加载 ~9.3 MB 索引（一次性、单例），不发起任何 LLM 请求（AC-06）。
 
+### 6.5 设置页切换 + 中文译中（2026-09-03 续，用户拍板「UI + 译中 都做」）
+
+激活后经 `CONTENT_DICT_ID` 环境变量可用，但改源要动 `.env` 重启、且内容词显示英文（JMdict 仅英文）。
+本步补齐「可切换」与「中文显示」两块，分两阶段：
+
+**阶段 A — 设置页切换数据源（零 LLM）**
+- `app_settings` 新增 `key="contentDictionary"`（值 `{ "id": "none" | "jmdict-common" }`，
+  镜像 `key="llm"` 模式；新建 `settings` 模块解析/持久化，不污染 LLM 设置）。
+- `resolveContentDictionaryId(dbValue, envValue)` 已支持三级：db > env > none；
+  `createContentDictionaryHolder` 在 `createApp` 时读 db 值传入。
+- 新增 `GET/PUT /api/content-dictionary/settings`：
+  - GET 返回 `{ current, available: [{id,label,ready,stats}] }`（stats 含索引版本/表面键数）；
+  - PUT 收 `{ id }` → 写库 → `holder.replace(next)` 热切换（无需重启，沿用 `LlmProviderHolder` 同款模式）。
+- 前端「设置」视图加数据源下拉 + 统计展示，保存即热切换。
+
+**阶段 B — Ollama 译中（中文释义，LLM-011 已批准）**
+- 用户 2026-09-03 明确选择「UI + 译中 都做」＝批准本路径；仅本地 Ollama 推理，不触发 DeepSeek、零云端费用。
+- 新增 `vocabulary_cache` 表（key=英文释义归一化串 → 中文；首次翻译后落库，避免重复推理）。
+- 新增 `GlossTranslator` 接口 + `OllamaGlossTranslator`：轻量 `translate(term)` 走 Ollama `/api/chat`
+  （翻译专用提示，与 `OllamaProvider.analyze` 分离，不动 `ContentDictionaryProvider` 契约）。
+- `prepareSegmentTokens` 增可选第 5 参 `glossTranslator?`：内容词命中后若提供 translator
+  则把英文 gloss 译中（命中缓存直接用），结果写 `token.gloss`/`explanation`；
+  **仅 `startDictionaryOnly` / `processBatch` 传 translator**，`previewAnalysis`/`countSegmentTokens` 不传（预览不翻译、不耗推理）。
+- Ollama 未启动/翻译失败 → 优雅回退英文（不阻断分析，AC-05 精神）。
+- 设置页加「译中（Ollama）」开关，默认开（用户已批准）；关闭则内容词显示英文原文。
+
+**验收增量**
+- 设置页：GET 返回当前源与可用源；PUT 改源后下次分析用新源（热切换）；db 覆盖 env。
+- 译中：内容词首现时英文→中文并落 `vocabulary_cache`；二次同词命中缓存、零推理；
+  Ollama 不可用回退英文且分析不中断；关闭开关显示英文。
+- 代价：译中仅在真实分析路径发生，本地推理无云端费用；索引与缓存均为 `data/` 本地文件。
+
 ---
 
 ## 七、验收标准（EARS 格式）

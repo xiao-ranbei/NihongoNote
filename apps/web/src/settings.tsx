@@ -12,6 +12,7 @@ import {
   type LlmSettingsState,
   type LlmThinkingType
 } from "./api/client";
+import { ContentDictionarySettings } from "./ContentDictionarySettings";
 
 /**
  * LLM 设置页（设计文档 llm-settings-design.md，落实 LLM-011 成本显性 + 多配置管理）。
@@ -672,6 +673,8 @@ export function SettingsPanel(props: { onSettingsSaved: () => void }): ReactElem
           {" "}清空数据库设置（app_settings 表的 llm 键）即可回到 .env 行为。
         </p>
       </div>
+
+      <ContentDictionarySettings />
     </section>
   );
 }

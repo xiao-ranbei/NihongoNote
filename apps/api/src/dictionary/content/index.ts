@@ -57,14 +57,18 @@ export interface ContentDictionaryHolder {
 /**
  * 构建并安全初始化数据源容器（异步：首次需读取索引文件，只发生一次）。
  *
- * 解析顺序：env CONTENT_DICT_ID（数据库 contentDictionary 键待设置页 UI 接入后补）。
+ * 解析顺序：db contentDictionary 键（设置页持久化） → env CONTENT_DICT_ID → 默认 none。
  * 默认 none ⇒ 不加载任何索引，行为与接入前完全一致（AC-01）。
  * 索引缺失/损坏由 initializeContentDictionary 静默回落 Null（AC-05）。
+ *
+ * 注意参数顺序：settingsValue 在前（db 优先），envValue 在后；
+ * 旧调用 `createContentDictionaryHolder("jmdict-common")` 单参仍等价于「仅 env」。
  */
 export async function createContentDictionaryHolder(
+  settingsValue?: string | null,
   envValue?: string | null
 ): Promise<ContentDictionaryHolder> {
-  const id = resolveContentDictionaryId(undefined, envValue);
+  const id = resolveContentDictionaryId(settingsValue, envValue);
   const provider = await initializeContentDictionary(createContentDictionary(id));
   const holder: ContentDictionaryHolder = {
     current: provider,
