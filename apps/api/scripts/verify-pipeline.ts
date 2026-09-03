@@ -51,6 +51,21 @@ import {
   mergeAnalysis
 } from "../src/services/analysis-service.js";
 import { prepareSegmentTokens } from "../src/segment-preparation.js";
+import {
+  contentDictionaryConfidence,
+  createContentDictionary,
+  FixtureContentDictionary,
+  initializeContentDictionary,
+  joinGlosses,
+  listContentDictionaryIds,
+  NullContentDictionary,
+  preferredGloss,
+  resolveContentDictionaryId
+} from "../src/dictionary/content/index.js";
+import type {
+  ContentDictionaryProvider,
+  ContentLookupQuery
+} from "../src/dictionary/content/types.js";
 import { DocumentRepository } from "../src/repositories/document-repository.js";
 import { OllamaProvider } from "../src/providers/ollama.js";
 import {
@@ -1492,6 +1507,212 @@ check("多配置：PUT 归一化——旧单组请求兼容（无 profiles 字�
   assert.equal(resolved.settings.apiKey, "sk-new", "新 key 应直接采用");
   assert.equal(resolved.activeProfileId, resolved.profiles[0]!.id, "旧请求应激活第一个配置");
   return "无 profiles → 双配置底 + 展开字段写回 + 新 key 采用";
+});
+
+console.log("=== 内容词词典层：可插拔接口与降级（AC-01..AC-08）===");
+// 设计文档 docs/jmdict-integration-design.md 接口层验证。数据源未定时默认 none，
+// 行为与接入前完全一致；任何数据源只需实现接口即可接入，主链路零改动。
+const contentSegment = (id: string, text: string) => ({
+  id,
+  documentId: "doc-content",
+  index: 0,
+  text,
+  startOffset: 0,
+  endOffset: text.length,
+  speaker: null,
+  status: "queued" as const,
+  errorMessage: null
+});
+
+const fixtureDict = new FixtureContentDictionary();
+await fixtureDict.initialize();
+const noneDict = new NullContentDictionary();
+
+// 自定义 provider：对「の」也返回命中，用于验证固定库优先于内容层
+const onoProvider: ContentDictionaryProvider = {
+  id: "test-ono",
+  label: "t",
+  ready: () => true,
+  async initialize() {},
+  lookup: (query: ContentLookupQuery) =>
+    query.surface === "の"
+      ? {
+          surface: "の",
+          reading: "ノ",
+          partsOfSpeech: ["助詞"],
+          glosses: [{ lang: "zh", text: "之（应被固定库覆盖）" }],
+          source: "test",
+          matchedBy: "surface" as const
+        }
+      : null,
+  stats: () => ({ entries: 1, loaded: true, version: "t", license: "none" })
+};
+
+// 自定义 provider：对「本」返回命中，用于验证可扩展性（不走注册表）
+const bookProvider: ContentDictionaryProvider = {
+  id: "test-book",
+  label: "t",
+  ready: () => true,
+  async initialize() {},
+  lookup: (query: ContentLookupQuery) =>
+    query.surface === "本"
+      ? {
+          surface: "本",
+          reading: "ホン",
+          partsOfSpeech: ["名詞"],
+          glosses: [{ lang: "en", text: "book" }],
+          source: "test",
+          matchedBy: "surface" as const
+        }
+      : null,
+  stats: () => ({ entries: 1, loaded: true, version: "t", license: "none" })
+};
+
+// 会初始化抛错的数据源，用于验证静默降级
+const failingProvider: ContentDictionaryProvider = {
+  id: "failing",
+  label: "f",
+  ready: () => false,
+  async initialize() {
+    throw new Error("datasource corrupt");
+  },
+  lookup: () => null,
+  stats: () => ({ entries: 0, loaded: false, version: null, license: null })
+};
+
+const cText1 = "これは私の本です。";
+const cSeg1 = contentSegment("c:1", cText1);
+const cBound1 = tokenizeJapanese(cText1, "c:1");
+const prepFixtureTime = await prepareSegmentTokens(
+  contentSegment("c:time", "時間です。"),
+  tokenizeJapanese("時間です。", "c:time"),
+  fixtureDict
+);
+const prepFixtureBook = await prepareSegmentTokens(
+  contentSegment("c:book", "本です。"),
+  tokenizeJapanese("本です。", "c:book"),
+  fixtureDict
+);
+const prepOno = await prepareSegmentTokens(cSeg1, cBound1, onoProvider);
+const prepBook = await prepareSegmentTokens(
+  contentSegment("c:book", "本です。"),
+  tokenizeJapanese("本です。", "c:book"),
+  bookProvider
+);
+const prepNone = await prepareSegmentTokens(cSeg1, cBound1, noneDict);
+const prepUndef = await prepareSegmentTokens(cSeg1, cBound1, undefined);
+const safeProvider = await initializeContentDictionary(failingProvider);
+
+check("内容词典：默认 none 实现始终返回 null 且 ready=false", () => {
+  assert.equal(noneDict.lookup({ surface: "時間" }), null, "none 不得编造任何释义");
+  assert.equal(noneDict.ready(), false, "none 不应进入就绪状态");
+  assert.equal(noneDict.stats().entries, 0);
+  return "none → null / ready=false / entries=0";
+});
+check("内容词典：createContentDictionary 默认回 none，未知 id 回落 none", () => {
+  assert.ok(createContentDictionary() instanceof NullContentDictionary, "无参应回 none");
+  assert.ok(
+    createContentDictionary("fixture") instanceof FixtureContentDictionary,
+    "fixture 应回样例实现"
+  );
+  assert.ok(
+    createContentDictionary("unknown-id") instanceof NullContentDictionary,
+    "未知 id 静默回落 none"
+  );
+  return `list=${listContentDictionaryIds().join(",")}`;
+});
+check("内容词典：resolveContentDictionaryId 优先级 db → env → 默认 none", () => {
+  assert.equal(resolveContentDictionaryId("fixture", "jmdict"), "fixture", "db 覆盖 env");
+  assert.equal(resolveContentDictionaryId(undefined, "jmdict"), "jmdict", "无 db 取 env");
+  assert.equal(resolveContentDictionaryId(), "none", "全缺省 none");
+  return "db > env > none";
+});
+check("内容词典：fixture 表面直击 + 多语言优先级 zh>ja>en", () => {
+  const hit = fixtureDict.lookup({ surface: "時間" });
+  assert.ok(hit, "時間应被 fixture 命中");
+  assert.equal(hit!.surface, "時間");
+  assert.equal(hit!.matchedBy, "surface");
+  assert.deepEqual(hit!.partsOfSpeech, ["名詞"]);
+  const gloss = preferredGloss(hit!);
+  assert.equal(gloss!.lang, "zh", "展示语言应优先中文");
+  assert.equal(gloss!.text, "时间");
+  assert.equal(joinGlosses(hit!, "en"), "time；hours", "同语言多义用全角分号拼接");
+  return "時間 → zh「时间」优先；en 含 time/hours";
+});
+check("内容词典：原形回退 surface→lemma（AC-04）", () => {
+  const hit = fixtureDict.lookup({ surface: "かかって", lemma: "かかる" });
+  assert.ok(hit, "かかって 无 surface 命中，应回退 lemma かかる");
+  assert.equal(hit!.surface, "かかる", "命中词形应替换为 lemma");
+  assert.equal(hit!.matchedBy, "lemma", "应标记 lemma 回退");
+  return "かかって → かかる（matchedBy=lemma）";
+});
+check("内容词典：未命中返回 null 不编造（AC-02）", () => {
+  assert.equal(fixtureDict.lookup({ surface: "存在しない語" }), null, "未收录词不得编造释义");
+  return "未命中 → null，交 LLM";
+});
+check("内容词典：内容层命中走 localTokens，不进 LLM（AC-06 零费用前置）", () => {
+  const timeHit = prepFixtureTime.localTokens.find((token) => token.surface === "時間");
+  assert.ok(timeHit, "時間应被内容层本地命中");
+  assert.equal(timeHit!.category, "word", "内容词类别为 word");
+  assert.equal(timeHit!.confidence, 0.8, "内容层置信度 0.8（低于固定库 1.0）");
+  assert.equal(timeHit!.source, "dictionary");
+  assert.equal(prepFixtureTime.llmBoundaries.length, 0, "全部命中，无 LLM 候选");
+  return `時間 → word/conf=${timeHit!.confidence}/${timeHit!.gloss}；llm=0`;
+});
+check("内容词典：未命中内容词仍落 LLM（不误吞）", () => {
+  const bookLlm = prepFixtureBook.llmBoundaries.find((boundary) => boundary.surface === "本");
+  assert.ok(bookLlm, "本不在 fixture 中应进 LLM 候选");
+  return "本 → llm 候选（不误判为命中）";
+});
+check("内容词典：固定用法库优先于内容层（AC-03）", () => {
+  const noToken = prepOno.localTokens.find((token) => token.surface === "の");
+  assert.ok(noToken, "の应被固定库命中");
+  assert.equal(noToken!.category, "particle", "固定库类别粒子，不被内容层 word 覆盖");
+  assert.equal(noToken!.confidence, 1, "固定库置信度 1.0，内容层 0.8 未篡位");
+  return "の → particle/conf=1（内容层 0.8 未覆盖）";
+});
+check("内容词典：自定义 provider 直传即生效，无需注册（AC-07 可扩展性）", () => {
+  const bookToken = prepBook.localTokens.find((token) => token.surface === "本");
+  assert.ok(bookToken, "本应被自定义 provider 本地命中");
+  assert.equal(bookToken!.category, "word");
+  assert.equal(bookToken!.confidence, contentDictionaryConfidence);
+  return "自定义 provider 不经注册即接入主链路";
+});
+check("内容词典：默认 none 与不传参行为完全一致（AC-01/AC-08 回归基线）", () => {
+  const surf = (arr: Array<{ surface: string }>): string => arr.map((item) => item.surface).sort().join(",");
+  assert.equal(
+    surf(prepNone.localTokens),
+    surf(prepUndef.localTokens),
+    "none 与不传参：localTokens 一致"
+  );
+  assert.equal(
+    surf(prepNone.llmBoundaries),
+    surf(prepUndef.llmBoundaries),
+    "none 与不传参：llmBoundaries 一致"
+  );
+  assert.deepEqual(
+    prepNone.localTokens.map((token) => token.surface).sort(),
+    ["です", "は", "の"].sort()
+  );
+  assert.deepEqual(
+    prepNone.llmBoundaries.map((boundary) => boundary.surface).sort(),
+    ["これ", "私", "本"].sort()
+  );
+  return "none ≡ undefined；命中 は/の/です，LLM これ/私/本";
+});
+check("内容词典：初始化抛错静默降级到 none（AC-05）", () => {
+  assert.ok(safeProvider instanceof NullContentDictionary, "应回落 NullContentDictionary");
+  assert.equal(safeProvider.ready(), false);
+  assert.equal(safeProvider.lookup({ surface: "時間" }), null, "降级后无释义");
+  return "抛错 → NullContentDictionary，分析不中断";
+});
+check("内容词典：固定库规模未变（AC-08 回归基线不退化）", () => {
+  const stats = getDictionaryStats();
+  assert.ok(
+    stats.particles >= 40 && stats.functional >= 30 && stats.endings >= 10,
+    "固定库下限维持"
+  );
+  return `助词 ${stats.particles} / 功能词 ${stats.functional} / 句末 ${stats.endings}`;
 });
 
 console.log("");
