@@ -248,11 +248,23 @@ CREATE TABLE vocabulary_cache (
 - 新增 `vocabulary_cache` 表（key=英文释义归一化串 → 中文；首次翻译后落库，避免重复推理）。
 - 新增 `GlossTranslator` 接口 + `OllamaGlossTranslator`：轻量 `translate(term)` 走 Ollama `/api/chat`
   （翻译专用提示，与 `OllamaProvider.analyze` 分离，不动 `ContentDictionaryProvider` 契约）。
-- `prepareSegmentTokens` 增可选第 5 参 `glossTranslator?`：内容词命中后若提供 translator
+- `prepareSegmentTokens` 增可选第 4 参 `glossTranslator?`：内容词命中后若提供 translator
   则把英文 gloss 译中（命中缓存直接用），结果写 `token.gloss`/`explanation`；
-  **仅 `startDictionaryOnly` / `processBatch` 传 translator**，`previewAnalysis`/`countSegmentTokens` 不传（预览不翻译、不耗推理）。
+  **仅 `startDictionaryOnly` / `processBatch` 传 translator**（`AnalysisService` 构造第 4 参注入），
+  `previewAnalysis`/`countSegmentTokens` 不传（预览不翻译、不耗推理）。
 - Ollama 未启动/翻译失败 → 优雅回退英文（不阻断分析，AC-05 精神）。
 - 设置页加「译中（Ollama）」开关，默认开（用户已批准）；关闭则内容词显示英文原文。
+- 开关经 `app_settings` 新 `key="glossTranslation"` 持久化，PUT 后 `translator.setEnabled` 热切换，无需重启；
+  启动时 db 值覆盖 `.env` 的 `CONTENT_DICT_TRANSLATE_ENABLED`（默认开）。
+
+**实施状态（2026-09-02，已落地）**
+- 新增 `src/dictionary/content/translator.ts`（`GlossTranslator` 接口 + `OllamaGlossTranslator` + `NullGlossTranslator` 兜底）、
+  `src/gloss-translation-settings.ts`、`src/routes/gloss-translation.ts`（`GET/PUT /api/gloss-translation/settings`）。
+- `config.ts` 增 `CONTENT_DICT_TRANSLATE_ENABLED/BASE_URL/MODEL`（enabled 默认 true）、`schema.ts` 增 `vocabulary_cache` 表。
+- `AnalysisService` 构造注入 `glossTranslator`；`app.ts` 构建并接 route + 启动时读 db 覆盖 env。
+- Web：`api/client.ts` 增 `get/saveGlossTranslationSettings`，`ContentDictionarySettings.tsx` 增译中开关 + `styles.css` 开关样式。
+- verify 新增 6 条断言（启用译中→中文 / 抛错回退英文 / 禁用→英文 / Ollama 缓存零推理 + 探活不抛错 / 设置解析与往返），
+  **verify 122/122 通过**（较阶段 A 的 116 增 6）。
 
 **验收增量**
 - 设置页：GET 返回当前源与可用源；PUT 改源后下次分析用新源（热切换）；db 覆盖 env。

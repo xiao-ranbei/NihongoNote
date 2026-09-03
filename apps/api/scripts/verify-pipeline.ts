@@ -67,10 +67,20 @@ import {
   type ContentDictionaryHolder
 } from "../src/dictionary/content/index.js";
 import {
+  type GlossTranslator,
+  NullGlossTranslator,
+  OllamaGlossTranslator
+} from "../src/dictionary/content/translator.js";
+import {
   loadContentDictionarySettings,
   parseContentDictionarySettings,
   saveContentDictionarySettings
 } from "../src/content-dictionary-settings.js";
+import {
+  loadGlossTranslationSettings,
+  parseGlossTranslationSettings,
+  saveGlossTranslationSettings
+} from "../src/gloss-translation-settings.js";
 import type {
   ContentDictionaryProvider,
   ContentLookupQuery
@@ -903,7 +913,7 @@ const threeLayerDoc = threeLayerRepo.create({
   sourceText: "これは私の本です。",
   targetLevel: "auto"
 });
-const threeLayerService = new AnalysisService(threeLayerRepo, { current: mockProvider }, noContentDict, "v-test");
+const threeLayerService = new AnalysisService(threeLayerRepo, { current: mockProvider }, noContentDict, new NullGlossTranslator(), "v-test");
 threeLayerService.start(threeLayerDoc.id);
 
 let threeLayerProgress;
@@ -1106,7 +1116,7 @@ const toolsDoc = toolsRepo.create({
   sourceText: "これは私の本です。",
   targetLevel: "auto"
 });
-const toolsService = new AnalysisService(toolsRepo, { current: mockProvider }, noContentDict, "v-test");
+const toolsService = new AnalysisService(toolsRepo, { current: mockProvider }, noContentDict, new NullGlossTranslator(), "v-test");
 const dictOnlyProgress = await toolsService.startDictionaryOnly(toolsDoc.id);
 const dictOnlyRows = toolsDb.all<{ result_json: string; usage_json: string | null; provider: string; model: string }>(
   "SELECT result_json, usage_json, provider, model FROM segment_analyses"
@@ -1876,6 +1886,125 @@ check("内容词典：设置写库/读库往返一致", () => {
 });
 cdSettingsDb.close();
 fs.rmSync(cdSettingsDir, { recursive: true, force: true });
+
+console.log("");
+console.log("=== 内容词典：译中（Ollama 中文释义，§6.5 阶段 B）===");
+// 译中器接口 + 译中注入 prepareSegmentTokens 的两条关键路径：
+// (a) 启用且成功 → 英文释义被替换为中文；
+// (b) 禁用 / 抛错 → 回退英文原文，不阻断分析。
+function makeFakeTranslator(result: string, shouldThrow = false): GlossTranslator {
+  return {
+    isEnabled: () => true,
+    setEnabled: () => {},
+    isAvailable: async () => true,
+    translate: async () => {
+      if (shouldThrow) {
+        throw new Error("译中失败（模拟）");
+      }
+      return result;
+    }
+  };
+}
+
+const transFixture = new FixtureContentDictionary();
+await transFixture.initialize();
+const prepTranslated = await prepareSegmentTokens(
+  { id: "t:1", text: "営業です。" } as never,
+  tokenizeJapanese("営業です。", "t:1"),
+  transFixture,
+  makeFakeTranslator("商务")
+);
+const prepThrowing = await prepareSegmentTokens(
+  { id: "t:2", text: "営業です。" } as never,
+  tokenizeJapanese("営業です。", "t:2"),
+  transFixture,
+  makeFakeTranslator("商务", true)
+);
+const prepDisabled = await prepareSegmentTokens(
+  { id: "t:3", text: "営業です。" } as never,
+  tokenizeJapanese("営業です。", "t:3"),
+  transFixture,
+  new NullGlossTranslator()
+);
+
+check("译中：启用译中器时内容词英文释义被替换为中文", () => {
+  const tok = prepTranslated.localTokens.find((t) => t.surface === "営業");
+  assert.ok(tok, "営業 应被内容词典命中");
+  assert.equal(tok.gloss, "商务", "gloss 应为译中结果首义项");
+  assert.equal(tok.explanation, "商务", "explanation 应为译中结果");
+  return "営業→business→商务（译中生效，source=dictionary）";
+});
+check("译中：译中器抛错时回退英文原文，不阻断分析", () => {
+  const tok = prepThrowing.localTokens.find((t) => t.surface === "営業");
+  assert.ok(tok, "営業 仍应被内容词典命中");
+  assert.equal(tok.gloss, "business", "回退：gloss 保留英文");
+  assert.equal(tok.explanation, "business", "回退：explanation 保留英文");
+  return "译中失败 → 回退英文原文（分析不中断）";
+});
+check("译中：译中器禁用（NullGlossTranslator）时显示英文原文", () => {
+  const tok = prepDisabled.localTokens.find((t) => t.surface === "営業");
+  assert.ok(tok, "営業 仍应被内容词典命中");
+  assert.equal(tok.explanation, "business", "禁用译中 → 英文原文");
+  return "禁用译中 → 内容词显示英文（与接入前一致）";
+});
+
+// OllamaGlossTranslator 缓存往返：种子 vocabulary_cache 后无需联网即可命中，
+// 且 isAvailable() 在 Ollama 未启动时不抛错（返回 false）。
+const gtDir = path.resolve(process.cwd(), "data", "_verify_gt");
+const gtFile = path.join(gtDir, "gt.db");
+fs.rmSync(gtDir, { recursive: true, force: true });
+const gtDb = await createDatabase(gtFile);
+const gtTranslator = new OllamaGlossTranslator({
+  database: gtDb,
+  baseUrl: "http://127.0.0.1:11434",
+  model: "qwen3.5:9b",
+  enabled: true
+});
+// 直接种子缓存避免真实联网；在 check 前 await 完毕（check 不支持异步工作体）
+gtDb.run(
+  "INSERT OR REPLACE INTO vocabulary_cache (term, translation, lang, created_at) VALUES (?, ?, 'zh', ?)",
+  ["business", "商务", new Date().toISOString()]
+);
+const gtCacheResult = {
+  out: await gtTranslator.translate("business"),
+  enabled: gtTranslator.isEnabled(),
+  avail: await gtTranslator.isAvailable()
+};
+check("译中：OllamaGlossTranslator 缓存命中零推理、可用探活不抛错", () => {
+  // 直接种子缓存，避免真实联网；结果已在 check 前 await 完毕
+  const out = gtCacheResult.out;
+  assert.equal(out, "商务", "命中缓存应直接返回已存中文，无需联网");
+  assert.equal(gtCacheResult.enabled, true, "默认启用");
+  assert.equal(gtCacheResult.avail, false, "Ollama 未启动 → 探活返回 false（不抛错）");
+  return "缓存命中→商务；isAvailable 在不启动时返回 false 而非抛错";
+});
+
+console.log("");
+console.log("=== 内容词典：译中设置后端（零 LLM，§6.5 阶段 B）===");
+check("译中：设置解析只接受布尔 enabled", () => {
+  assert.doesNotThrow(() => parseGlossTranslationSettings({ enabled: true }), "true 合法");
+  assert.doesNotThrow(() => parseGlossTranslationSettings({ enabled: false }), "false 合法");
+  assert.throws(() => parseGlossTranslationSettings({ enabled: "yes" }), "非布尔拒绝");
+  assert.throws(() => parseGlossTranslationSettings({}), "缺 enabled 拒绝");
+  return "true/false 通过；非布尔/缺字段拒绝";
+});
+const gtSettingsDir = path.resolve(process.cwd(), "data", "_verify_gts");
+const gtSettingsFile = path.join(gtSettingsDir, "gts.db");
+fs.rmSync(gtSettingsDir, { recursive: true, force: true });
+const gtSettingsDb = await createDatabase(gtSettingsFile);
+check("译中：设置写库/读库往返一致（key=glossTranslation）", () => {
+  saveGlossTranslationSettings(gtSettingsDb, { enabled: false });
+  const loaded = loadGlossTranslationSettings(gtSettingsDb);
+  assert.ok(loaded && loaded.enabled === false, "读回应与写入一致");
+  saveGlossTranslationSettings(gtSettingsDb, { enabled: true });
+  const loadedOn = loadGlossTranslationSettings(gtSettingsDb);
+  assert.ok(loadedOn && loadedOn.enabled === true, "可切回 true");
+  return "写库/读库往返一致（key=glossTranslation）";
+});
+gtSettingsDb.close();
+fs.rmSync(gtSettingsDir, { recursive: true, force: true });
+gtDb.close();
+fs.rmSync(gtDir, { recursive: true, force: true });
 
 console.log("");
 let failed = 0;

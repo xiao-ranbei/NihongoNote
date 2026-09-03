@@ -68,7 +68,27 @@ const environmentSchema = z.object({
   TTS_SPEED: optionalPositiveNumberSchema,
   TTS_FORMAT: optionalStringSchema,
   TTS_SSML_VERSION: optionalStringSchema,
-  CONTENT_DICT_ID: optionalStringSchema
+  CONTENT_DICT_ID: optionalStringSchema,
+  /**
+   * 译中（阶段 B）开关：默认开（设计文档 §6.5）。仅本地 Ollama 推理、零云端费用，
+   * 且 Ollama 未启动 / 翻译失败会回退英文原文不阻断分析，故默认开启安全。
+   * 显式设 false 可关闭。
+   */
+  CONTENT_DICT_TRANSLATE_ENABLED: z.preprocess((value) => {
+    if (typeof value !== "string") {
+      return value ?? true;
+    }
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true" || normalized === "1") {
+      return true;
+    }
+    if (normalized === "false" || normalized === "0") {
+      return false;
+    }
+    return true; // 未设置 → 默认开
+  }, z.boolean().default(true)),
+  CONTENT_DICT_TRANSLATE_BASE_URL: optionalStringSchema,
+  CONTENT_DICT_TRANSLATE_MODEL: optionalStringSchema
 });
 
 const environment = environmentSchema.parse(process.env);
@@ -103,7 +123,12 @@ export const appConfig = {
   ttsSpeed: environment.TTS_SPEED,
   ttsFormat: environment.TTS_FORMAT,
   ttsSsmlVersion: environment.TTS_SSML_VERSION,
-  contentDictId: environment.CONTENT_DICT_ID
+  contentDictId: environment.CONTENT_DICT_ID,
+  contentDictTranslateEnabled: environment.CONTENT_DICT_TRANSLATE_ENABLED,
+  contentDictTranslateBaseUrl: environment.CONTENT_DICT_TRANSLATE_BASE_URL
+    ?? "http://127.0.0.1:11434",
+  contentDictTranslateModel: environment.CONTENT_DICT_TRANSLATE_MODEL
+    ?? "qwen3.5:9b"
 } as const;
 
 export type AppConfig = typeof appConfig;

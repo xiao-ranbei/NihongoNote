@@ -2,8 +2,11 @@ import { useEffect, useState, type ReactElement } from "react";
 
 import {
   getContentDictionarySettings,
+  getGlossTranslationSettings,
   saveContentDictionarySettings,
-  type ContentDictionarySettingsState
+  saveGlossTranslationSettings,
+  type ContentDictionarySettingsState,
+  type GlossTranslationState
 } from "./api/client";
 
 /**
@@ -20,6 +23,11 @@ export function ContentDictionarySettings(): ReactElement {
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+
+  // 译中（阶段 B）：内容词英文释义 → 中文，本地 Ollama 推理、零云端费用。
+  const [gloss, setGloss] = useState<GlossTranslationState | null>(null);
+  const [glossSaving, setGlossSaving] = useState(false);
+  const [glossError, setGlossError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -39,6 +47,17 @@ export function ContentDictionarySettings(): ReactElement {
       .finally(() => {
         if (!cancelled) {
           setIsLoading(false);
+        }
+      });
+    void getGlossTranslationSettings()
+      .then((next) => {
+        if (!cancelled) {
+          setGloss(next);
+        }
+      })
+      .catch((reason: unknown) => {
+        if (!cancelled) {
+          setGlossError(reason instanceof Error ? reason.message : "读取译中设置失败");
         }
       });
     return () => {
@@ -61,6 +80,19 @@ export function ContentDictionarySettings(): ReactElement {
       setError(reason instanceof Error ? reason.message : "保存失败");
     } finally {
       setIsSaving(false);
+    }
+  }
+
+  async function handleGlossToggle(nextEnabled: boolean): Promise<void> {
+    setGlossSaving(true);
+    setGlossError(null);
+    try {
+      const next = await saveGlossTranslationSettings({ enabled: nextEnabled });
+      setGloss(next);
+    } catch (reason: unknown) {
+      setGlossError(reason instanceof Error ? reason.message : "保存失败");
+    } finally {
+      setGlossSaving(false);
     }
   }
 
@@ -142,6 +174,32 @@ export function ContentDictionarySettings(): ReactElement {
         <span className="field-note">
           {selectedId === state.current.id ? "已是当前数据源" : "保存即热切换至所选数据源"}
         </span>
+      </div>
+
+      <hr className="settings-divider" />
+
+      <div className="settings-field gloss-translate-row">
+        <div className="gloss-translate-head">
+          <span className="gloss-translate-title">内容词译中（Ollama）</span>
+          <label className="switch">
+            <input
+              type="checkbox"
+              checked={gloss?.enabled ?? false}
+              disabled={glossSaving || gloss === null}
+              onChange={(event) => void handleGlossToggle(event.target.checked)}
+            />
+            <span className="switch-slider" />
+          </label>
+        </div>
+        <small className="field-note">
+          内容词（如启用 JMdict）默认显示英文释义；开启后用本机 Ollama 把英文译为中文并缓存，
+          后续零推理。仅本地推理、不触发云端、零费用。Ollama 未启动或翻译失败会自动回退英文，
+          不阻断分析。
+          {gloss ? (
+            gloss.available ? "（本机 Ollama 已就绪）" : "（本机 Ollama 未连接：开启后将回退英文，启动 Ollama 后自动生效）"
+          ) : null}
+        </small>
+        {glossError ? <div className="error-banner">{glossError}</div> : null}
       </div>
     </div>
   );

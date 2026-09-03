@@ -70,10 +70,19 @@ export const databaseSchema = `
     created_at TEXT NOT NULL
   );
 
-  -- 应用设置（key-value，JSON 存 value）：当前存 llm 键（设计文档 llm-settings-design.md）
+  -- 应用设置（key-value，JSON 存 value）：当前存 llm / contentDictionary 键
   CREATE TABLE IF NOT EXISTS app_settings (
     key TEXT PRIMARY KEY NOT NULL,
     value TEXT NOT NULL
+  );
+
+  -- 内容词译中缓存（设计文档 jmdict-integration-design.md §6.5 阶段 B）：
+  -- 英文释义 → 中文译文，首次译中后落库，避免重复本地推理。term 为归一化英文串（小写去空格）。
+  CREATE TABLE IF NOT EXISTS vocabulary_cache (
+    term TEXT PRIMARY KEY NOT NULL,
+    translation TEXT NOT NULL,
+    lang TEXT NOT NULL DEFAULT 'zh',
+    created_at TEXT NOT NULL
   );
 
   CREATE INDEX IF NOT EXISTS idx_documents_updated_at

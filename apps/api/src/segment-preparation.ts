@@ -2,6 +2,7 @@ import type { Segment, TokenAnalysis } from "@nihongonote/core";
 
 import { lookupToken } from "./dictionary/lookup.js";
 import type { ContentDictionaryProvider } from "./dictionary/content/types.js";
+import type { GlossTranslator } from "./dictionary/content/translator.js";
 import {
   contentDictionaryConfidence,
   joinGlosses,
@@ -38,7 +39,8 @@ export interface PreparedSegmentTokens {
 export async function prepareSegmentTokens(
   segment: Segment,
   boundaries: TokenBoundary[],
-  contentDictionary?: ContentDictionaryProvider | null
+  contentDictionary?: ContentDictionaryProvider | null,
+  glossTranslator?: GlossTranslator | null
 ): Promise<PreparedSegmentTokens> {
   const morphology = await tokenizeWithMorphology(segment.text);
   const aligned = alignMorphology(boundaries, morphology);
@@ -65,6 +67,20 @@ export async function prepareSegmentTokens(
 
       if (contentHit) {
         const gloss = preferredGloss(contentHit);
+        const englishText = gloss ? joinGlosses(contentHit, gloss.lang) : null;
+        // 译中（阶段 B）：内容词英文释义 → 中文，缓存于 vocabulary_cache；
+        // 失败（Ollama 未启动等）回退英文原文，不阻断分析。
+        let finalGloss = gloss?.text ?? null;
+        let finalExplanation = englishText;
+        if (glossTranslator && englishText && glossTranslator.isEnabled()) {
+          try {
+            const zh = await glossTranslator.translate(englishText);
+            finalExplanation = zh;
+            finalGloss = zh.split(/[;；]/u)[0]?.trim() || zh;
+          } catch {
+            // 保留英文原文
+          }
+        }
         localTokens.push({
           tokenId: boundary.tokenId,
           startOffset: boundary.startOffset,
@@ -75,8 +91,8 @@ export async function prepareSegmentTokens(
           reading: morph?.reading ?? contentHit.reading ?? null,
           partOfSpeech: morph?.partOfSpeech ?? contentHit.partsOfSpeech[0] ?? null,
           conjugation: morph?.conjugation ?? null,
-          gloss: gloss?.text ?? null,
-          explanation: gloss ? joinGlosses(contentHit, gloss.lang) : null,
+          gloss: finalGloss,
+          explanation: finalExplanation,
           confidence: contentDictionaryConfidence,
           source: "dictionary"
         });

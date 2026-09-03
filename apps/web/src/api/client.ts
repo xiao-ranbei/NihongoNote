@@ -396,6 +396,39 @@ export function saveContentDictionarySettings(input: { id: string }): Promise<Co
   );
 }
 
+export interface GlossTranslationState {
+  enabled: boolean;
+  /** 本地 Ollama 是否可连接（实时探活） */
+  available: boolean;
+}
+
+function parseGlossTranslationState(payload: unknown): GlossTranslationState {
+  if (typeof payload !== "object" || payload === null || !("enabled" in payload)) {
+    throw new Error("译中设置返回格式不正确");
+  }
+  return payload as GlossTranslationState;
+}
+
+export function getGlossTranslationSettings(): Promise<GlossTranslationState> {
+  return request(
+    "/api/gloss-translation/settings",
+    { method: "GET" },
+    parseGlossTranslationState
+  );
+}
+
+export function saveGlossTranslationSettings(input: { enabled: boolean }): Promise<GlossTranslationState> {
+  return request(
+    "/api/gloss-translation/settings",
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(input)
+    },
+    parseGlossTranslationState
+  );
+}
+
 /** 仅供工具页校验 mode 值（与 core 契约保持一致）。 */
 export { analysisModeSchema };
 export type { AnalysisMode, AnalysisPreview };

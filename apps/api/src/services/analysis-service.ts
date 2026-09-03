@@ -19,6 +19,7 @@ import { packingSafetyRatio, planBatches } from "../llm-budget.js";
 import { estimateCost } from "../llm-pricing.js";
 import { prepareSegmentTokens } from "../segment-preparation.js";
 import type { ContentDictionaryHolder } from "../dictionary/content/index.js";
+import type { GlossTranslator } from "../dictionary/content/translator.js";
 import type {
   LlmAnalysisResult,
   LlmProvider,
@@ -160,6 +161,13 @@ export class AnalysisService {
      * 行为与接入前完全一致（AC-01）。
      */
     private readonly contentDictionaryHolder: ContentDictionaryHolder,
+    /**
+     * 译中器（阶段 B）：内容词英文释义 → 中文，仅本地 Ollama，零云端成本。
+     * 仅在真实分析路径（startDictionaryOnly / processBatch）注入；
+     * 预览/估算路径不传，避免每个预览都烧本地推理。
+     * Ollama 未启动或翻译失败时调用方回退英文（不阻断分析，AC-05/AC-06 精神）。
+     */
+    private readonly glossTranslator: GlossTranslator,
     private readonly promptVersion: string,
     private readonly batchSize = 3,
     private readonly batchConcurrency = 2,
@@ -251,7 +259,8 @@ export class AnalysisService {
       const { localTokens } = await prepareSegmentTokens(
         segment,
         boundaries,
-        this.contentDictionaryHolder.current
+        this.contentDictionaryHolder.current,
+        this.glossTranslator
       );
       const analysis = segmentAnalysisSchema.parse({
         segmentId: segment.id,
@@ -432,7 +441,8 @@ export class AnalysisService {
       const { localTokens, llmBoundaries } = await prepareSegmentTokens(
         segment,
         boundaries,
-        this.contentDictionaryHolder.current
+        this.contentDictionaryHolder.current,
+        this.glossTranslator
       );
       return { segment, boundaries, localTokens, llmBoundaries };
     }));
