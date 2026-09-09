@@ -266,6 +266,23 @@ CREATE TABLE vocabulary_cache (
 - verify 新增 6 条断言（启用译中→中文 / 抛错回退英文 / 禁用→英文 / Ollama 缓存零推理 + 探活不抛错 / 设置解析与往返），
   **verify 122/122 通过**（较阶段 A 的 116 增 6）。
 
+**实机验证（2026-09-09，qwen3.5:9b 本地）**
+
+`pnpm --filter @nihongonote/api gloss-smoke`（`scripts/gloss-translation-smoke.ts`）真实调用本机 Ollama：
+
+| 英文释义 | 译中结果 | 首次 | 二次（缓存） |
+| --- | --- | --- | --- |
+| business | 商业；生意；商务；企业；公司 | 9594 ms（含模型冷加载） | **0 ms** |
+| estimate | 估计；估算；估价 | 273 ms | **0 ms** |
+| efficiency | 效率；功效；效能 | 282 ms | **0 ms** |
+| personal history | 个人经历；个人履历 | 274 ms | **0 ms** |
+
+- 二次调用结果完全一致、`vocabulary_cache` 落库 4 条 → 缓存复用成立，零重复推理。
+- 端到端「営業の見積もりと効率を確認します。」：全部 token 释义为中文，`確認し` 经 lemma 回退命中，
+  **LLM 候选 0 个**——该句零 AI 调用。
+- 全程本地推理、零云端费用。
+- 注：`token.gloss` 取首义项（如 営業→「商业」），`token.explanation` 为完整多义项串。
+
 **验收增量**
 - 设置页：GET 返回当前源与可用源；PUT 改源后下次分析用新源（热切换）；db 覆盖 env。
 - 译中：内容词首现时英文→中文并落 `vocabulary_cache`；二次同词命中缓存、零推理；
