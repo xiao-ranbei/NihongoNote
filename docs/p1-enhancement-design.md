@@ -205,6 +205,27 @@ interface ReaderSelection {
 
 > S0 是 S2/S3 的硬前提：在 1763 行单文件里加范围渲染与层级状态机会不可控。
 
+### S0 已完成（2026-09-09）
+
+`App.tsx` **1763 → 937 行**，拆为 8 个模块：
+
+| 模块 | 承接内容 |
+| --- | --- |
+| `lib/constants.ts` | 等级/类型选项、token 类别标签、`Segment`/`MvpDocument` 等类型、导出版本号 |
+| `lib/format.ts` | 日期/状态/费用格式化、文件名安全化、下载触发、`optionalText` |
+| `lib/storage.ts` | localStorage 读写、学习库偏好键、主题键与六套主题、`resolveThemeName` |
+| `lib/tokens.ts` | `getTokenCategory` / `isRenderableToken`（P1 范围归属派生函数后续也放这里） |
+| `components/ArticleSurface.tsx` | `renderSegmentContent` / `renderArticle`（连续阅读表面） |
+| `components/TokenPopover.tsx` | 词语解析卡（含 `TokenFact`） |
+| `components/SegmentAnalysisPanel.tsx` | 句段解析面板 |
+| `components/DocumentMetadataEditor.tsx` | 文章元数据编辑 |
+
+**零功能变化的证据**（四重）：
+1. `App()` 主体与拆分前 **diff 逐字节一致**；
+2. 抽取的 785 行代码归一化比对后，**唯一差异是 `statusLabel` 签名换行**（纯格式）；
+3. 生产构建 bundle **321.49 kB / gzip 93.52 kB，与拆分前完全相同**；
+4. typecheck（strict）零错误、API verify 122/122。
+
 ### 各期完成标准（DoD）
 - verify 全绿、typecheck 与生产构建干净；
 - 新增断言覆盖本期新增行为；
