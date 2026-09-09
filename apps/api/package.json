@@ -11,7 +11,8 @@
     "regression": "tsx scripts/regression-corpus.ts",
     "dictionary-coverage": "tsx scripts/dictionary-coverage.ts",
     "dictionary-gap": "tsx scripts/dictionary-gap-analysis.ts",
-    "build:jmdict-index": "tsx scripts/build-jmdict-index.ts"
+    "build:jmdict-index": "tsx scripts/build-jmdict-index.ts",
+    "gloss-smoke": "tsx scripts/gloss-translation-smoke.ts"
   },
   "dependencies": {
     "@nihongonote/core": "workspace:*",

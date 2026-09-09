@@ -1972,11 +1972,16 @@ const gtCacheResult = {
 };
 check("译中：OllamaGlossTranslator 缓存命中零推理、可用探活不抛错", () => {
   // 直接种子缓存，避免真实联网；结果已在 check 前 await 完毕
-  const out = gtCacheResult.out;
-  assert.equal(out, "商务", "命中缓存应直接返回已存中文，无需联网");
+  assert.equal(gtCacheResult.out, "商务", "命中缓存应直接返回已存中文，无需联网");
   assert.equal(gtCacheResult.enabled, true, "默认启用");
-  assert.equal(gtCacheResult.avail, false, "Ollama 未启动 → 探活返回 false（不抛错）");
-  return "缓存命中→商务；isAvailable 在不启动时返回 false 而非抛错";
+  // 探活契约只保证「返回布尔且不抛错」——Ollama 是否在运行取决于本机环境，
+  // 不能把「未启动」硬编码为期望值（否则本机跑着 Ollama 时断言会假失败）。
+  assert.equal(
+    typeof gtCacheResult.avail,
+    "boolean",
+    `isAvailable() 应返回布尔且不抛错（当前 ${String(gtCacheResult.avail)}）`
+  );
+  return `缓存命中→商务；isAvailable 返回 ${String(gtCacheResult.avail)}（布尔、未抛错）`;
 });
 
 console.log("");
