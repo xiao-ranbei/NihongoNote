@@ -137,7 +137,7 @@ interface LlmProvider {
 
 ### 4.5 前端（变更）
 
-- **拆分 `App.tsx`**（约 1600 行）为：`useAnalysis`（分析生命周期 + 流式订阅）、`useLibrary`（列表/搜索/筛选）、`useSettings`、`useTheme`，组件层保持纯展示 + 回调。
+- **继续拆分 `App.tsx`**（现 937 行）：S0 已把纯函数与展示组件拆成 8 个模块（1763 → 937，见 [p1-enhancement-design.md](p1-enhancement-design.md) §S0），剩下的 `App()` 本体（约 865 行）承载全部状态逻辑，需拆为：`useAnalysis`（分析生命周期 + 流式订阅）、`useLibrary`（列表/搜索/筛选）、`useSettings`、`useTheme`，组件层保持纯展示 + 回调。
 - **流式客户端** `streamAnalysis()`：`fetch` + `ReadableStream` 手动解析 SSE（不用 `EventSource`，因为需要 POST + 自定义请求体）。
 - **渲染策略**：
   - 段级增量合并，按 `segmentId` 定位，**不重挂**已有段（React key 复用）`[JA]`。
@@ -235,7 +235,7 @@ sequenceDiagram
 
 | 约束 | 影响 | 方向 |
 | --- | --- | --- |
-| `App.tsx` 约 1600 行 | 阻塞流式、范围标注、移动端抽屉 | **M1 第一件事**：拆 hooks + 组件 |
+| `App.tsx` 仍 937 行，`App()` 本体约 865 行未拆 | 阻塞流式、范围标注、移动端抽屉 | S0 已拆出 8 个模块；M1 把本体状态拆成 hooks |
 | 本地 9B 单段 30-80s | 长文整体耗时仍是分钟级 | 段落级流式改善体感；另评估更小模型 / 更激进档位 |
 | 批处理对本地模型空转 | `planBatches` 估算式按 DeepSeek 标定，本地恒为 1 段/批 | 给 provider 加 `estimateOutputTokens` 钩子，按本地实测标定 |
 | sql.js 无增量落盘 | 崩溃丢最后 2s 写入 | 已用 `recoverInterruptedAnalyses()` 兜底；后续评估 `node:sqlite`（见技术栈 §4） |
