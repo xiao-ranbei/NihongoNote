@@ -113,7 +113,10 @@ import {
   repairStrayQuotes
 } from "../src/providers/openai-compatible.js";
 import {
+  deepseekOutputTokenModel,
+  estimateCompletionTokens,
   hardMaxCompletionTokens,
+  localOutputTokenModel,
   packingSafetyRatio,
   planBatches
 } from "../src/llm-budget.js";
@@ -549,6 +552,45 @@ check("分批结果确定：同输入必得同输出", () => {
   return "两次调用得到完全相同的分批结果";
 });
 
+console.log("=== 输出估算模型：provider 自声明（M1.10）===");
+/*
+ * 句子固定 20 字符便于手算：
+ *   云端系数 3500 + 20 × 230 = 8100；本地系数 0 + 20 × 107.1 = 2142（取整 6426 / 3 段）。
+ * 本地预算模拟 Ollama：min(12000, 8192) × 0.77 = 6308。
+ */
+const estimateSegments = (count: number, charCount: number) =>
+  Array.from({ length: count }, (_, index) => ({
+    id: `est${index}`,
+    text: "あ".repeat(charCount)
+  }));
+
+check("云端与本地估算相差数倍（用错模型必然失真）", () => {
+  const sample = estimateSegments(3, 20);
+  const cloud = estimateCompletionTokens(sample, deepseekOutputTokenModel);
+  const local = estimateCompletionTokens(sample, localOutputTokenModel);
+  assert.equal(cloud, 24_300, "3 × (3500 + 20 × 230)");
+  assert.equal(Math.round(local), 6_426, "3 × (0 + 20 × 107.1)");
+  assert.ok(cloud / local > 3, `高估应超过 3 倍，实际 ${(cloud / local).toFixed(2)}`);
+  return `3 段 × 20 字：云端 24300 vs 本地 6426（${(cloud / local).toFixed(2)} 倍）`;
+});
+check("本地预算下：本地模型能合并，沿用云端模型则只能单段", () => {
+  const sample = estimateSegments(3, 20);
+  const localBudget = Math.floor(Math.min(12_000, 8_192) * packingSafetyRatio);
+  const withLocal = planBatches(sample, 3, localBudget, localOutputTokenModel);
+  const withCloud = planBatches(sample, 3, localBudget, deepseekOutputTokenModel);
+  assert.deepEqual(
+    withLocal.map((batch) => batch.length),
+    [2, 1],
+    "本地系数下两段共 4284 ≤ 6308，应能同批"
+  );
+  assert.deepEqual(
+    withCloud.map((batch) => batch.length),
+    [1, 1, 1],
+    "沿用云端系数时单段 8100 已超预算，只能一段一批"
+  );
+  return `预算 ${localBudget}：本地 → 2+1 段；云端 → 1+1+1 段`;
+});
+
 console.log("=== 落盘：防抖写入 ===");
 const persistDirectory = path.resolve(process.cwd(), "data", "_verify");
 const persistFile = path.join(persistDirectory, "persist-check.db");
@@ -902,6 +944,7 @@ const mockProvider: LlmProvider = {
   model: "mock-model",
   configured: true,
   completionTokenBudget: 100_000,
+  outputTokenModel: deepseekOutputTokenModel,
   async analyze(request): Promise<LlmAnalysisResult> {
     receivedBoundaries.push(request.tokenBoundaries.map((group) => ({
       segmentId: group.segmentId,
@@ -1243,6 +1286,34 @@ check("Ollama：configured 恒 true（localhost 免鉴权，无 key 概念）", 
   assert.equal(ollamaProvider.protocol, "openai", "协议面保持 openai 以复用调用路径");
   assert.equal(ollamaProvider.model, "qwen3.5:9b");
   return "configured=true / protocol=openai / model=qwen3.5:9b";
+});
+check("provider 声明各自的输出估算模型（云端与本地不可混用）", () => {
+  const cloudProvider = buildLlmProvider({
+    llmProvider: "deepseek",
+    llmProtocol: "openai",
+    llmBaseUrl: "https://api.deepseek.com",
+    llmApiKey: "sk-verify-only",
+    llmModel: "deepseek-v4-flash",
+    llmTemperature: 0.2,
+    llmMaxTokens: 12_000,
+    llmTimeoutMs: 300_000,
+    llmThinkingType: "enabled",
+    llmReasoningEffort: "minimal",
+    llmDebugLogging: false,
+    llmDebugLogFile: ""
+  });
+  assert.deepEqual(
+    cloudProvider.outputTokenModel,
+    deepseekOutputTokenModel,
+    "OpenAI 兼容 provider 用云端标定系数"
+  );
+  assert.deepEqual(
+    ollamaProvider.outputTokenModel,
+    localOutputTokenModel,
+    "Ollama provider 用本地标定系数（think 关闭，无固定推理开销）"
+  );
+  return `deepseek → ${deepseekOutputTokenModel.tokensPerCharacter}/字符；`
+    + `ollama → ${localOutputTokenModel.tokensPerCharacter}/字符`;
 });
 check("Ollama：输出预算压到 8K 上限（内存保护）", () => {
   assert.equal(ollamaProvider.completionTokenBudget, 8_192, "maxTokens=12000 应被压到 8192");

@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import { segmentAnalysisSchema, type SegmentFieldProfile } from "@nihongonote/core";
 
+import { localOutputTokenModel } from "../llm-budget.js";
 import {
   buildSystemPrompt,
   parseJsonResponse,
@@ -92,6 +93,12 @@ export class OllamaProvider implements LlmProvider {
    * 配置上限（LLM_MAX_TOKENS）再大也会被压缩到 8K，保护 16GB VRAM 不 OOM。
    */
   public readonly completionTokenBudget: number;
+  /**
+   * 本地小模型（think 关闭）的输出估算模型，2026-09-13 由 23 个真实单段批标定
+   * （见 scripts/calibrate-output-model.ts）。**不能沿用云端系数**：那样对本地输出
+   * 高估约 4.8 倍，预算 6308 连两段都装不下，批次恒为 1。
+   */
+  public readonly outputTokenModel = localOutputTokenModel;
 
   private readonly timeoutMs: number;
   private readonly temperature: number;

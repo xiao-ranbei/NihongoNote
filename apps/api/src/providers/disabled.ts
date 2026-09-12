@@ -1,4 +1,4 @@
-import { hardMaxCompletionTokens } from "../llm-budget.js";
+import { deepseekOutputTokenModel, hardMaxCompletionTokens } from "../llm-budget.js";
 import {
   ProviderNotConfiguredError,
   type AnalysisRequest,
@@ -16,6 +16,8 @@ export class DisabledLlmProvider implements LlmProvider {
   public readonly model = "disabled";
   public readonly configured = false;
   public readonly completionTokenBudget = hardMaxCompletionTokens;
+  // 未配置时不会真正发起分析，取默认模型即可。
+  public readonly outputTokenModel = deepseekOutputTokenModel;
 
   public async analyze(_request: AnalysisRequest): Promise<LlmAnalysisResult> {
     throw new ProviderNotConfiguredError("LLM");

@@ -12,6 +12,7 @@ import { z } from "zod";
 import { segmentAnalysisSchema, type Segment, type SegmentFieldProfile } from "@nihongonote/core";
 
 import {
+  deepseekOutputTokenModel,
   estimateCompletionTokens,
   hardMaxCompletionTokens
 } from "../llm-budget.js";
@@ -504,6 +505,11 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
   public readonly configured: boolean;
   public readonly model: string;
   public readonly completionTokenBudget = hardMaxCompletionTokens;
+  /**
+   * 走 OpenAI 兼容端点的是云端大模型（DeepSeek / OpenAI 等），输出特性与
+   * DeepSeek thinking 档同源，故沿用同一套标定系数。
+   */
+  public readonly outputTokenModel = deepseekOutputTokenModel;
 
   private readonly client: OpenAI | undefined;
   private readonly apiKey: string | undefined;
@@ -558,7 +564,7 @@ export class OpenAiCompatibleLlmProvider implements LlmProvider {
     return Math.min(
       Math.max(
         this.maxTokens,
-        Math.ceil(estimateCompletionTokens(segments) * completionTokenSafetyFactor)
+        Math.ceil(estimateCompletionTokens(segments, this.outputTokenModel) * completionTokenSafetyFactor)
       ),
       hardMaxTokens
     );

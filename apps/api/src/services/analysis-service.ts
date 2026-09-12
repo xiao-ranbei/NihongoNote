@@ -577,10 +577,11 @@ export class AnalysisService {
          * 固定段数在长句段上会把单次请求顶到 token 上限（实测样本 2 因此丢 3 段），
          * 而一味调小 batch_size 又让短句段多花请求。batchSize 退化为"最多几段"。
          */
-        const tokenBudget = Math.floor(
-          this.providerHolder.current.completionTokenBudget * packingSafetyRatio
-        );
-        const batches = planBatches(queued, this.batchSize, tokenBudget)
+        // provider 取一次存局部变量：打包期间若设置页热切换了 provider，
+        // 预算与估算模型必须来自同一个实例，否则会算出矛盾的分批。
+        const provider = this.providerHolder.current;
+        const tokenBudget = Math.floor(provider.completionTokenBudget * packingSafetyRatio);
+        const batches = planBatches(queued, this.batchSize, tokenBudget, provider.outputTokenModel)
           .slice(0, this.batchConcurrency)
           .map((batch) => {
             const claimed = new Set(this.repository.markSegmentsProcessing(batch.map((segment) => segment.id)));

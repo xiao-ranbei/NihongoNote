@@ -1,5 +1,6 @@
 import type { ContentType, Segment, SegmentAnalysis, SegmentFieldProfile } from "@nihongonote/core";
 
+import type { OutputTokenModel } from "../llm-budget.js";
 import type { TokenBoundary } from "../tokenization.js";
 
 export type LlmProtocol = "openai" | "anthropic";
@@ -75,6 +76,14 @@ export interface LlmProvider {
    * 业务层用它来装箱：批次的估算成本必须留出安全余量，否则长句段凑一批会被截断。
    */
   readonly completionTokenBudget: number;
+  /**
+   * 输出 token 估算模型（离线标定的产物，见 scripts/calibrate-output-model.ts）。
+   *
+   * 必须由 provider 自己声明，而不是业务层用一套通用系数：各provider 的输出特性差异极大——
+   * DeepSeek thinking 档每段固定开销就有数千 token，本地小模型（think 关闭）几乎只有
+   * 与字符数成正比的部分。用错模型会让本地场景批次恒为 1 段（实测高估约 4.8 倍）。
+   */
+  readonly outputTokenModel: OutputTokenModel;
   analyze(request: AnalysisRequest): Promise<LlmAnalysisResult>;
   /**
    * 查询当前账号余额。provider 未配置或无余额接口时返回 null。

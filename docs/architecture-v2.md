@@ -194,7 +194,12 @@ sequenceDiagram
 | 词性/类别由本地归一 | 模型标签漂移会毁掉配色与线型 | 归一会丢失模型的部分细粒度信息，需保留原始值备查 |
 | 埋点默认关闭 | 隐私是本项目底线 | 排查线上问题需用户手动开启，信息窗口有限 |
 | **分批保持确定性，不做运行时自适应** | 成本预估是对用户的承诺：同样的文章 + 同样的配置必须得到同样的钱 | 估算偏差只能用**离线标定**修正，不能靠运行时试探；自适应会让预估与实际漂移 |
-| provider 自行声明输出估算能力 | 通用估算式按 DeepSeek thinking 标定，对本地模型高估约 4.8 倍，导致恒 1 段/批 | 每个 provider 需维护自己的标定系数，新增 provider 时多一步标定 |
+| provider 自行声明输出估算能力 | 通用估算式按 DeepSeek thinking 标定，对本地模型高估约 3.8–4.8 倍，导致恒 1 段/批 | 每个 provider 需维护自己的标定系数，新增 provider 时多一步标定 |
+
+> **落地结果（2026-09-13）**：`LlmProvider.outputTokenModel` 已实现，`apps/api/scripts/calibrate-output-model.ts`
+> （`pnpm --filter @nihongonote/api calibrate`）可从落库 `usage_json` 直接标定系数。实测：
+> 云端均值 593/段 + 247.5/字符（R² 仅 0.44，thinking 方差极大），本地均值 60.4/字符、上界 107.1/字符；
+> 同一预算 6307 下本地能装 2 段（原先 1 段）。**仍需把 `LLM_BATCH_SIZE` 从 1 调大才能真正受益**。
 
 ---
 
@@ -237,7 +242,7 @@ sequenceDiagram
 | --- | --- | --- |
 | `App.tsx` 仍 937 行，`App()` 本体约 865 行未拆 | 阻塞流式、范围标注、移动端抽屉 | S0 已拆出 8 个模块；M1 把本体状态拆成 hooks |
 | 本地 9B 单段 30-80s | 长文整体耗时仍是分钟级 | 段落级流式改善体感；另评估更小模型 / 更激进档位 |
-| 批处理对本地模型空转 | `planBatches` 估算式按 DeepSeek 标定，本地恒为 1 段/批 | 给 provider 加 `estimateOutputTokens` 钩子，按本地实测标定 |
+| ~~批处理对本地模型空转~~（**已修 2026-09-13**） | 原估算式按 DeepSeek 标定，本地恒为 1 段/批 | 已改为 `provider.outputTokenModel` + `calibrate` 离线标定（本地 107.1/字符）；调大 `LLM_BATCH_SIZE` 后即可合并 |
 | sql.js 无增量落盘 | 崩溃丢最后 2s 写入 | 已用 `recoverInterruptedAnalyses()` 兜底；后续评估 `node:sqlite`（见技术栈 §4） |
 | 无自动化测试框架 | 回归靠 `verify-pipeline.ts` 脚本 | M3 引入 vitest，并把脚本按模块拆分 |
 | 词典覆盖率 92.7% 后边际收益递减 | 继续扩词典性价比下降 | 转向「上下文裁剪 + 档位」降本 |
