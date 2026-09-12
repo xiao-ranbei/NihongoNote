@@ -108,4 +108,6 @@ pnpm build
 - 本地数据库和音频目录不进入 Git。
 - 组件样式不写硬编码颜色，统一引用 CSS 变量；六套主题（纸白 / 夜读 / 编辑部 / 雑誌 / 工作台 / 手帳）通过 `data-theme` 属性切换，规范见[主题系统](docs/theme-system.md)。
 
-详细设计见[技术架构方案](docs/architecture.md)、[迭代路线图](docs/roadmap.md)和[优化评审清单](docs/optimization-review.md)。
+详细设计见[技术架构方案](docs/architecture.md)（目标方案）、[现状系统架构](docs/system-architecture.md)（代码实际实现，含[架构图](docs/architecture-diagram.html)）、[迭代路线图](docs/roadmap.md)和[优化评审清单](docs/optimization-review.md)。
+
+**当前权威规划**（2026-09-12 v2 规划集）：[系统架构方案](docs/architecture-v2.md) · [技术栈选型](docs/tech-stack-v2.md) · [需求文档](docs/requirements-v2.md) · [项目规划](docs/roadmap-v2.md)。

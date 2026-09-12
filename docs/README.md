@@ -4,9 +4,24 @@
 
 ## 文档索引
 
+### v2 规划集（2026-09-12，当前权威版本）
+
+借鉴开源同类工具 japanese-analyzer 后重新规划，四份互链：
+
+- [系统架构方案 v2](architecture-v2.md)：**目标态权威**——系统边界与刻意不做、段级流式通道、可观测性层、关键决策与代价、借鉴资产清单。
+- [技术栈选型 v2](tech-stack-v2.md)：逐层选型理由与代价、v2 不新增生产依赖的说明、待评估升级（`node:sqlite` / vitest / VOICEVOX）、刻意不引入清单。
+- [需求文档 v2](requirements-v2.md)：需求条目化（保留原 ID）+ 当前状态标注 + 新增流式/可观测性/容错三组需求 + 状态矩阵。
+- [项目规划 v2](roadmap-v2.md)：M1 实时反馈 → M2 标注与分层 → M3 自用质量 → M4 扩展，含关键路径、量化指标、验证方式与回滚方案。
+
+> 旧版 `architecture.md` / `requirements.md` / `roadmap.md` 保留为历史记录，不再作为权威。
+
+### 其余文档
+
 - [产品形态决策](product-decision.md)：为什么以本地 Web 应用为核心，以及 Agent/skill 的适用边界。
 - [产品需求说明](requirements.md)：已确认的用户场景、功能需求、数据结构和验收标准。
-- [技术架构方案](architecture.md)：前后端、AI 分析、TTS 接口预留、存储和隐私设计。
+- [技术架构方案](architecture.md)：前后端、AI 分析、TTS 接口预留、存储和隐私设计（目标方案与设计意图）。
+- [系统架构设计（现状）](system-architecture.md)：**改代码看这份**——核心模块、数据流、数据模型与可靠性机制，描述代码实际实现。
+- [系统架构图](architecture-diagram.html)：分层总览、分析流水线、数据模型与治理机制的可视化（浏览器直接打开）。
 - [LLM 提示词与请求协议](llm-prompt.md)：当前 `systemPrompt` 的源码位置、OpenAI SDK 请求字段、响应校验和调试日志。
 - [迭代路线图](roadmap.md)：分阶段交付范围、周期、进度快照、审阅记录和后续扩展。
 - [2026-08-29 完整语料回归报告](regression-2026-08-29.md)：两篇样本 55 个句段的真实 LLM 端到端原始数据。
