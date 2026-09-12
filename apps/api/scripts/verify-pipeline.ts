@@ -501,6 +501,54 @@ check("单段超预算也单独成批（不死循环）", () => {
   return "估算 118500 token 的句段单独成批，后续句段正常排队";
 });
 
+console.log("=== 装箱：最小块保护（防小尾巴）===");
+/*
+ * 长度按估算式（3500 + 230 × 字符数）反推，保证用例在当前预算下成立：
+ * 11 字 → 6030（占预算 24.5%），12 字 → 6260（25.4%），20 字 → 8100（32.9%）。
+ * 阈值是短尾上限 30%，落在 6260 与 8100 之间，因此 11/12 字的尾批触发判定、
+ * 20 字的不触发。
+ */
+const tailSegments = (charCount: number, count: number) =>
+  Array.from({ length: count }, (_, index) => ({
+    id: `tail${index}`,
+    text: "か".repeat(charCount)
+  }));
+
+check("尾批过短时并入前一批（4 × 11 字）", () => {
+  const batches = planBatches(tailSegments(11, 4), 3, packingBudget);
+  assert.equal(batches.length, 1, `期望合并为 1 批，实际 ${batches.length} 批`);
+  assert.equal(batches[0]!.length, 4, "尾批应并入前一批，允许比 batchSize 多 1 段");
+  assert.deepEqual(
+    batches.flat().map((s) => s.id),
+    ["tail0", "tail1", "tail2", "tail3"],
+    "合并不得改变句段顺序，也不得丢段"
+  );
+  return "3 段 + 1 段尾批（6030 / 24640 = 24.5%）→ 合并为 1 批 4 段";
+});
+check("并入后会超预算时保持小尾批（4 × 12 字）", () => {
+  const batches = planBatches(tailSegments(12, 4), 3, packingBudget);
+  assert.equal(batches.length, 2, "合并会越过 token 上限，越界被截断才是真浪费");
+  assert.equal(batches[1]!.length, 1, "尾批应保持原样，不得为了合并而越界");
+  return "3 段 + 1 段尾批；合并后 25040 > 预算 24640 → 不合并";
+});
+check("尾批不算短时不做调整（4 × 20 字）", () => {
+  const batches = planBatches(tailSegments(20, 4), 3, packingBudget);
+  assert.equal(batches.length, 2, "尾批占预算 32.9%，不属于小尾巴，不该被动");
+  return "尾批 8100 / 24640 = 32.9% ≥ 30% 阈值 → 保持 2 批";
+});
+check("batchSize=1 为严格单段模式，不触发合并", () => {
+  const batches = planBatches(tailSegments(11, 3), 1, packingBudget);
+  assert.equal(batches.length, 3, "用户显式要求每批 1 段时必须尊重该意图");
+  return "maxItems < 2 → 最小块保护不生效，3 段仍是 3 批";
+});
+check("分批结果确定：同输入必得同输出", () => {
+  const input = tailSegments(11, 4);
+  const first = planBatches(input, 3, packingBudget).map((batch) => batch.map((s) => s.id));
+  const second = planBatches(input, 3, packingBudget).map((batch) => batch.map((s) => s.id));
+  assert.deepEqual(first, second, "装箱不得依赖运行时状态（成本预估可信的前提）");
+  return "两次调用得到完全相同的分批结果";
+});
+
 console.log("=== 落盘：防抖写入 ===");
 const persistDirectory = path.resolve(process.cwd(), "data", "_verify");
 const persistFile = path.join(persistDirectory, "persist-check.db");
