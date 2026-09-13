@@ -299,6 +299,21 @@ export const analysisProgressSchema = z.object({
 });
 export type AnalysisProgress = z.infer<typeof analysisProgressSchema>;
 
+/**
+ * 分析事件的流式推送契约（M1.2 段级上屏，后端 SSE 与前端订阅共用）。
+ *
+ * 事件语义：
+ * - `segment`：一个段落完成校验并已落库，`analysis` 是完整段落分析——前端据此让该段上屏；
+ * - `segment-failed`：一个段落失败（`message` 已是面向用户的说明）；
+ * - `progress`：进度快照（订阅建立与断线重连时立即收到，用于对齐状态）；
+ * - `done`：该文档的分析流程结束（成功/取消/失败均会发出），前端应刷新文档与列表。
+ */
+export type AnalysisStreamEvent =
+  | { type: "segment"; documentId: string; segmentId: string; analysis: SegmentAnalysis }
+  | { type: "segment-failed"; documentId: string; segmentId: string; message: string }
+  | { type: "progress"; documentId: string; progress: AnalysisProgress }
+  | { type: "done"; documentId: string };
+
 export const llmBalanceEntrySchema = z.object({
   currency: z.string().min(1),
   totalBalance: z.string().min(1),

@@ -3,6 +3,7 @@ import {
   type AnalysisPreview,
   type AnalysisProgress,
   type Segment,
+  type AnalysisStreamEvent,
   type SegmentAnalysis,
   type SegmentFieldProfile,
   type TokenAnalysis
@@ -146,6 +147,49 @@ function contextFor(segment: Segment, allSegments: Segment[]): string[] {
 
 export class AnalysisService {
   private readonly activeRuns = new Map<string, ActiveRun>();
+  /** 每个文档的分析事件订阅者（SSE 连接；同一文档允许多个标签页同时订阅）。 */
+  private readonly streamListeners = new Map<string, Set<(event: AnalysisStreamEvent) => void>>();
+
+  /**
+   * 订阅某文档的分析事件，返回退订函数。
+   * 监听器抛异常由 emitStreamEvent 兜住——单个 SSE 连接的写失败不能拖垮分析主流程。
+   */
+  public subscribe(
+    documentId: string,
+    listener: (event: AnalysisStreamEvent) => void
+  ): () => void {
+    const set = this.streamListeners.get(documentId) ?? new Set();
+    set.add(listener);
+    this.streamListeners.set(documentId, set);
+    return () => {
+      const current = this.streamListeners.get(documentId);
+      if (!current) {
+        return;
+      }
+      current.delete(listener);
+      if (current.size === 0) {
+        this.streamListeners.delete(documentId);
+      }
+    };
+  }
+
+  private emitStreamEvent(event: AnalysisStreamEvent): void {
+    for (const listener of this.streamListeners.get(event.documentId) ?? []) {
+      try {
+        listener(event);
+      } catch {
+        // 单个 SSE 连接写失败（客户端已关闭等）不影响分析与其余订阅者
+      }
+    }
+  }
+
+  /** 向订阅方推一次当前进度快照（订阅建立时立即调用；断线重连后也靠它对齐）。 */
+  public emitProgress(documentId: string): void {
+    const progress = this.getProgress(documentId);
+    if (progress) {
+      this.emitStreamEvent({ type: "progress", documentId, progress });
+    }
+  }
 
   public constructor(
     private readonly repository: DocumentRepository,
@@ -482,6 +526,12 @@ export class AnalysisService {
           const message = errorMessage(reason);
           for (const segment of batch) {
             this.repository.markSegmentFailed(segment.id, message);
+            this.emitStreamEvent({
+              type: "segment-failed",
+              documentId,
+              segmentId: segment.id,
+              message
+            });
           }
           return;
         }
@@ -549,8 +599,22 @@ export class AnalysisService {
           this.promptVersion,
           result.usage
         );
+        // 段落完成即推送：前端立刻把这一段的分析内容上屏（不必等同批其它段或整篇）
+        this.emitStreamEvent({
+          type: "segment",
+          documentId,
+          segmentId: segment.id,
+          analysis: merged
+        });
       } catch (reason: unknown) {
-        this.repository.markSegmentFailed(segment.id, errorMessage(reason));
+        const failureMessage = errorMessage(reason);
+        this.repository.markSegmentFailed(segment.id, failureMessage);
+        this.emitStreamEvent({
+          type: "segment-failed",
+          documentId,
+          segmentId: segment.id,
+          message: failureMessage
+        });
       }
     }
   }
@@ -599,10 +663,14 @@ export class AnalysisService {
 
       if (this.isCurrent(documentId, run)) {
         this.repository.finalizeDocumentAnalysis(documentId);
+        this.emitProgress(documentId);
+        this.emitStreamEvent({ type: "done", documentId });
       }
     } catch (reason: unknown) {
       if (this.isCurrent(documentId, run)) {
         this.repository.markDocumentAnalysisFailed(documentId, errorMessage(reason));
+        this.emitProgress(documentId);
+        this.emitStreamEvent({ type: "done", documentId });
       }
     } finally {
       if (this.activeRuns.get(documentId)?.id === run.id) {

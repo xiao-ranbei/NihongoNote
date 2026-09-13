@@ -37,6 +37,7 @@ export type {
   AnalysisMode,
   AnalysisPreview,
   AnalysisPreviewDocument,
+  AnalysisStreamEvent,
   ApiError,
   AnalysisRevision,
   AnalysisProgress,

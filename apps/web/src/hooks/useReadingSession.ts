@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from 
 import type {
   AnalysisProgress,
   ContentType,
+  SegmentAnalysis,
   TargetLevel,
   TokenAnalysis,
   TokenAnalysisOverride
@@ -14,6 +15,7 @@ import {
   getDocument,
   retrySegment,
   startDocumentAnalysis,
+  subscribeAnalysisEvents,
   updateDocument,
   updateSegment,
   updateSegmentAnalysis,
@@ -88,6 +90,42 @@ export interface UseReadingSessionOptions {
   onDocumentMetadataChanged: (contentType: ContentType, targetLevel: TargetLevel) => void;
 }
 
+/**
+ * 把某个段落完成的分析合并进当前文档。
+ * 用 map 保持其余段落的引用不变，把重渲染范围限制在被更新的那一段。
+ */
+function mergeSegmentAnalysis(
+  current: MvpDocument | null,
+  segmentId: string,
+  analysis: SegmentAnalysis
+): MvpDocument | null {
+  if (!current) {
+    return current;
+  }
+  return {
+    ...current,
+    segments: current.segments.map((segment) =>
+      segment.id === segmentId ? { ...segment, status: "completed", analysis } : segment
+    )
+  };
+}
+
+function mergeSegmentFailure(
+  current: MvpDocument | null,
+  segmentId: string,
+  message: string
+): MvpDocument | null {
+  if (!current) {
+    return current;
+  }
+  return {
+    ...current,
+    segments: current.segments.map((segment) =>
+      segment.id === segmentId ? { ...segment, status: "failed", errorMessage: message } : segment
+    )
+  };
+}
+
 export function useReadingSession(options: UseReadingSessionOptions): ReadingSessionController {
   const [document, setDocument] = useState<MvpDocument | null>(null);
   const [progress, setProgress] = useState<AnalysisProgress | null>(null);
@@ -107,53 +145,53 @@ export function useReadingSession(options: UseReadingSessionOptions): ReadingSes
   const onMetadataChangedRef = useRef(options.onDocumentMetadataChanged);
   onMetadataChangedRef.current = options.onDocumentMetadataChanged;
 
-  // 分析进行中每 800ms 轮询进度；收尾时并发刷新当前文档与学习库列表。
-  // onLibraryChanged 走 ref：列表筛选条件变化不需要重启轮询。
+  // 分析进行中 → 订阅 SSE 段级事件（M1.2，替代轮询）：
+  // - segment 事件：该段已完成校验并落库，立即合并进当前文档让内容上屏（STREAM-001/002）；
+  // - progress 事件：订阅建立与断线重连时都会先收到快照，替代轮询的状态对齐（STREAM-004）；
+  // - done 事件：分析收尾（成功/取消/失败），刷新文档与学习库。
+  // EventSource 自带断线重连；本 effect 的启停只由「文档 + 是否 analyzing」驱动。
   useEffect(() => {
     const documentId = document?.id;
     if (!documentId || progress?.status !== "analyzing") {
       return;
     }
 
-    let cancelled = false;
-    let inFlight = false;
-    const poll = async (): Promise<void> => {
-      if (cancelled || inFlight) {
-        return;
+    const unsubscribe = subscribeAnalysisEvents(documentId, (event) => {
+      switch (event.type) {
+        case "progress": {
+          setProgress(event.progress);
+          break;
+        }
+        case "segment": {
+          setDocument((current) => mergeSegmentAnalysis(current, event.segmentId, event.analysis));
+          break;
+        }
+        case "segment-failed": {
+          setDocument((current) =>
+            mergeSegmentFailure(current, event.segmentId, event.message)
+          );
+          break;
+        }
+        case "done": {
+          void (async () => {
+            try {
+              const [fresh] = await Promise.all([
+                getDocument(documentId),
+                onLibraryChangedRef.current()
+              ]);
+              setDocument(fresh);
+            } catch (reason: unknown) {
+              onErrorRef.current(
+                reason instanceof Error ? reason.message : "读取分析进度失败"
+              );
+            }
+          })();
+          break;
+        }
       }
-      inFlight = true;
-      try {
-        const latest = await getAnalysisProgress(documentId);
-        if (cancelled) {
-          return;
-        }
-        setProgress(latest);
-        if (latest.status !== "analyzing") {
-          const [freshDocument] = await Promise.all([
-            getDocument(documentId),
-            onLibraryChangedRef.current()
-          ]);
-          if (!cancelled) {
-            setDocument(freshDocument);
-          }
-        }
-      } catch (reason: unknown) {
-        if (!cancelled) {
-          onErrorRef.current(reason instanceof Error ? reason.message : "读取分析进度失败");
-        }
-      } finally {
-        inFlight = false;
-      }
-    };
-    const timer = window.setInterval(() => {
-      void poll();
-    }, 800);
-    void poll();
+    });
 
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
+    return unsubscribe;
   }, [progress?.status, document?.id]);
 
   const openDocument = async (documentId: string): Promise<void> => {

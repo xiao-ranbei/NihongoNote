@@ -2,7 +2,8 @@ import type { FastifyInstance } from "fastify";
 import {
   analysisModeSchema,
   segmentFieldProfileSchema,
-  type AnalysisProgress
+  type AnalysisProgress,
+  type AnalysisStreamEvent
 } from "@nihongonote/core";
 import { z } from "zod";
 
@@ -120,6 +121,49 @@ export function registerAnalysisRoutes(
     }
     return progress;
   });
+
+  /*
+   * 段级流式事件（M1.2 / STREAM-001..005）：
+   * SSE 推送段落完成/失败、进度快照与收尾事件。订阅建立即发一次快照，
+   * EventSource 断线自动重连后同样先收到快照对齐——这就是断线可恢复（STREAM-004）。
+   * reply.hijack() 接管原始响应，绕过 Fastify 的序列化与压缩（SSE 必须逐块写出）。
+   */
+  app.get<{ Params: DocumentParams }>(
+    "/api/documents/:documentId/analysis/events",
+    async (request, reply) => {
+      const params = documentParamsSchema.safeParse(request.params);
+      if (!params.success) {
+        return invalidInput(reply, params.error.flatten());
+      }
+      const documentId = params.data.documentId;
+
+      reply.hijack();
+      const raw = reply.raw;
+      raw.writeHead(200, {
+        "content-type": "text/event-stream; charset=utf-8",
+        "cache-control": "no-cache",
+        connection: "keep-alive"
+      });
+      raw.write("retry: 3000\n\n");
+
+      const send = (event: AnalysisStreamEvent): void => {
+        raw.write(`data: ${JSON.stringify(event)}\n\n`);
+      };
+
+      // 先订阅再推快照，保证「当前状态」不会与后续事件乱序
+      const unsubscribe = service.subscribe(documentId, send);
+      service.emitProgress(documentId);
+
+      // 空闲心跳：防止本机代理/浏览器把静默连接掐掉
+      const heartbeat = setInterval(() => {
+        raw.write(": keep-alive\n\n");
+      }, 15_000);
+      request.raw.on("close", () => {
+        clearInterval(heartbeat);
+        unsubscribe();
+      });
+    }
+  );
 
   app.post<{ Params: SegmentParams }>("/api/segments/:segmentId/retry", async (request, reply) => {
     const params = segmentParamsSchema.safeParse(request.params);

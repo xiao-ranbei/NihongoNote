@@ -240,7 +240,7 @@ sequenceDiagram
 
 | 约束 | 影响 | 方向 |
 | --- | --- | --- |
-| `App.tsx` 仍 937 行，`App()` 本体约 865 行未拆 | 阻塞流式、范围标注、移动端抽屉 | S0 已拆出 8 个模块；M1 把本体状态拆成 hooks |
+| ~~`App.tsx` 本体未拆~~（**已解决 2026-09-13**） | 曾阻塞流式、范围标注、移动端抽屉 | 现为 554 行：5 个 hooks（theme / library / serviceStatus / composer / readingSession）+ 纯布局；流式订阅将落进 `useReadingSession` |
 | 本地 9B 单段 30-80s | 长文整体耗时仍是分钟级 | 段落级流式改善体感；另评估更小模型 / 更激进档位 |
 | ~~批处理对本地模型空转~~（**已修 2026-09-13**） | 原估算式按 DeepSeek 标定，本地恒为 1 段/批 | 已改为 `provider.outputTokenModel` + `calibrate` 离线标定（本地 107.1/字符）；调大 `LLM_BATCH_SIZE` 后即可合并 |
 | sql.js 无增量落盘 | 崩溃丢最后 2s 写入 | 已用 `recoverInterruptedAnalyses()` 兜底；后续评估 `node:sqlite`（见技术栈 §4） |

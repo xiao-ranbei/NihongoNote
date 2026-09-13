@@ -5,6 +5,7 @@ import {
   batchAnalysisStartResponseSchema,
   type AnalysisMode,
   type AnalysisPreview,
+  type AnalysisStreamEvent,
   type ContentType,
   type SegmentFieldProfile,
   documentDetailSchema,
@@ -24,6 +25,32 @@ import {
   type TargetLevel,
   type TokenAnalysisOverride
 } from "@nihongonote/core";
+
+/**
+ * 订阅某文档的分析事件（SSE，M1.2 段级上屏）。
+ *
+ * EventSource 自带断线重连；服务端在订阅建立与每次重连时都会先发一次进度快照，
+ * 因此订阅方拿到的第一个事件就是当前状态（STREAM-004）。
+ * 返回退订函数：组件卸载或分析结束后调用，避免幽灵连接。
+ */
+export type AnalysisStreamEventHandler = (event: AnalysisStreamEvent) => void;
+
+export function subscribeAnalysisEvents(
+  documentId: string,
+  onEvent: AnalysisStreamEventHandler
+): () => void {
+  const source = new EventSource(
+    `/api/documents/${encodeURIComponent(documentId)}/analysis/events`
+  );
+  source.onmessage = (message) => {
+    try {
+      onEvent(JSON.parse(message.data) as AnalysisStreamEvent);
+    } catch {
+      // 单条事件解析失败不应中断订阅
+    }
+  };
+  return () => source.close();
+}
 
 async function request<T>(
   input: RequestInfo | URL,
