@@ -1626,6 +1626,37 @@ h2 {
   text-underline-offset: 3px;
 }
 
+/*
+ * M1.8 / PERF-002：段级流式上屏时，新完成的标注**淡入**而非突兀出现。
+ * 动画只在元素首次获得标注类时触发——React 复用元素（key 稳定），已上屏的段
+ * 不会在后续更新中重复闪烁。transition 覆盖 hover/选中时的着色变化。
+ * 尊重系统「减少动态效果」偏好（无障碍，需求七-可维护性）。
+ */
+@keyframes annotation-enter {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.annotation-word,
+.annotation-particle,
+.annotation-functional,
+.annotation-adverb,
+.annotation-grammar {
+  animation: annotation-enter 600ms ease-out;
+  transition: background-color 300ms ease, border-color 300ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .annotation-word,
+  .annotation-particle,
+  .annotation-functional,
+  .annotation-adverb,
+  .annotation-grammar {
+    animation: none;
+    transition: none;
+  }
+}
+
 .annotation-word:hover,
 .annotation-word.is-selected,
 .annotation-swatch.annotation-word {
