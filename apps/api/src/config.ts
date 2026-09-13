@@ -66,6 +66,8 @@ const environmentSchema = z.object({
   /** 可观测性事件日志（OBS-003）：默认关闭；开启后写本机 JSONL，只含数值与分类，不含原文。 */
   OBSERVABILITY_ENABLED: booleanEnvironmentSchema,
   OBSERVABILITY_LOG_FILE: optionalStringSchema,
+  /** 流空闲超时（M1.4 / STREAM-003）：流式读取连续无数据超过该值即中止，防止本地模型卡死时无限等待。 */
+  LLM_STREAM_IDLE_TIMEOUT_MS: optionalPositiveNumberSchema,
   TTS_PROVIDER: z.string().min(1).default("disabled"),
   TTS_VOICE: optionalStringSchema,
   TTS_SPEED: optionalPositiveNumberSchema,
@@ -126,6 +128,7 @@ export const appConfig = {
     environment.OBSERVABILITY_LOG_FILE
       ?? path.resolve(environment.NIHONGO_DATA_DIR, "events.jsonl")
   ),
+  llmStreamIdleTimeoutMs: environment.LLM_STREAM_IDLE_TIMEOUT_MS ?? 90_000,
   ttsProvider: environment.TTS_PROVIDER,
   ttsVoice: environment.TTS_VOICE,
   ttsSpeed: environment.TTS_SPEED,

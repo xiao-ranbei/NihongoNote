@@ -50,6 +50,8 @@ interface OllamaProviderConfig {
   temperature: number;
   maxTokens: number;
   timeoutMs: number;
+  /** 流空闲超时（M1.4 / STREAM-003）；缺省 90s。 */
+  streamIdleTimeoutMs?: number;
   debugLogging: boolean;
   debugLogFile: string;
 }
@@ -93,6 +95,8 @@ export class OllamaProvider implements LlmProvider {
    * 配置上限（LLM_MAX_TOKENS）再大也会被压缩到 8K，保护 16GB VRAM 不 OOM。
    */
   public readonly completionTokenBudget: number;
+  /** 流空闲超时（M1.4 / STREAM-003）：默认 90s；连续无流数据超过该值即中止请求。 */
+  private readonly streamIdleTimeoutMs: number;
   /**
    * 本地小模型（think 关闭）的输出估算模型，2026-09-13 由 23 个真实单段批标定
    * （见 scripts/calibrate-output-model.ts）。**不能沿用云端系数**：那样对本地输出
@@ -109,6 +113,7 @@ export class OllamaProvider implements LlmProvider {
 
   public constructor(private readonly config: OllamaProviderConfig) {
     this.completionTokenBudget = Math.min(config.maxTokens, 8_192);
+    this.streamIdleTimeoutMs = config.streamIdleTimeoutMs ?? 90_000;
     this.model = config.model;
     this.timeoutMs = config.timeoutMs;
     this.temperature = config.temperature;
@@ -243,7 +248,10 @@ export class OllamaProvider implements LlmProvider {
     });
 
     const timeoutSignal = AbortSignal.timeout(this.timeoutMs);
-    const signal = AbortSignal.any([request.signal, timeoutSignal]);
+    // M1.4 / STREAM-003：空闲超时独立于整体超时——慢批不该被误杀，只有「真卡死」（连续
+    // streamIdleTimeoutMs 无任何流数据）才中止。整体 300s 上限仍兜底。
+    const idleController = new AbortController();
+    const signal = AbortSignal.any([request.signal, timeoutSignal, idleController.signal]);
     const startedAt = Date.now();
 
     let response: Response;
@@ -298,9 +306,22 @@ export class OllamaProvider implements LlmProvider {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    // 每次读取前重置空闲计时；连续无数据超限 → abort → read() 以我们的错误拒绝
+    let idleTimer: ReturnType<typeof setTimeout> | null = null;
+    const resetIdleTimer = (): void => {
+      if (idleTimer !== null) {
+        clearTimeout(idleTimer);
+      }
+      idleTimer = setTimeout(() => {
+        idleController.abort(
+          new ProviderRequestError(`LLM stream idle for over ${this.streamIdleTimeoutMs}ms`)
+        );
+      }, this.streamIdleTimeoutMs);
+    };
     try {
       for (;;) {
         signal.throwIfAborted();
+        resetIdleTimer();
         const { done, value } = await reader.read();
         if (done) {
           break;
@@ -346,8 +367,16 @@ export class OllamaProvider implements LlmProvider {
       if (timeoutSignal.aborted) {
         throw new ProviderRequestError(`LLM request timed out after ${this.timeoutMs}ms`);
       }
+      if (idleController.signal.aborted) {
+        throw idleController.signal.reason instanceof Error
+          ? idleController.signal.reason
+          : new ProviderRequestError("LLM stream idle timeout");
+      }
       throw new ProviderRequestError(`LLM request failed: ${sanitizedErrorMessage(error, undefined)}`);
     } finally {
+      if (idleTimer !== null) {
+        clearTimeout(idleTimer);
+      }
       reader.releaseLock();
     }
 

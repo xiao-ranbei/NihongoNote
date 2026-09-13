@@ -30,6 +30,7 @@ export type LlmBuildConfig = Pick<
   | "llmReasoningEffort"
   | "llmDebugLogging"
   | "llmDebugLogFile"
+  | "llmStreamIdleTimeoutMs"
 >;
 
 export function buildLlmProvider(config: LlmBuildConfig): LlmProvider {
@@ -53,6 +54,7 @@ export function buildLlmProvider(config: LlmBuildConfig): LlmProvider {
       temperature: config.llmTemperature,
       maxTokens: config.llmMaxTokens,
       timeoutMs: config.llmTimeoutMs,
+      streamIdleTimeoutMs: config.llmStreamIdleTimeoutMs,
       debugLogging: config.llmDebugLogging,
       debugLogFile: config.llmDebugLogFile
     });

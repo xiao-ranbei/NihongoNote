@@ -193,7 +193,8 @@ if (!useLlm) {
     llmReasoningEffort: merged.reasoningEffort ?? appConfig.llmReasoningEffort,
     // 跟随 .env，与真实服务行为一致（否则排查时拿不到原始响应）
     llmDebugLogging: appConfig.llmDebugLogging,
-    llmDebugLogFile: appConfig.llmDebugLogFile
+    llmDebugLogFile: appConfig.llmDebugLogFile,
+    llmStreamIdleTimeoutMs: appConfig.llmStreamIdleTimeoutMs
   };
   const provider = buildLlmProvider(buildConfig);
   console.log(

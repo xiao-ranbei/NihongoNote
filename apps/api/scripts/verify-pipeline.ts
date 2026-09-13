@@ -1278,6 +1278,7 @@ const ollamaProvider = new OllamaProvider({
   temperature: 0.2,
   maxTokens: 12_000,
   timeoutMs: 300_000,
+    streamIdleTimeoutMs: 90_000,
   debugLogging: false,
   debugLogFile: ""
 });
@@ -1297,6 +1298,7 @@ check("provider 声明各自的输出估算模型（云端与本地不可混用�
     llmTemperature: 0.2,
     llmMaxTokens: 12_000,
     llmTimeoutMs: 300_000,
+    llmStreamIdleTimeoutMs: 90_000,
     llmThinkingType: "enabled",
     llmReasoningEffort: "minimal",
     llmDebugLogging: false,
@@ -1324,6 +1326,7 @@ check("Ollama：输出预算压到 8K 上限（内存保护）", () => {
     temperature: 0.2,
     maxTokens: 5_000,
     timeoutMs: 300_000,
+    streamIdleTimeoutMs: 90_000,
     debugLogging: false,
     debugLogFile: ""
   });
@@ -1343,6 +1346,7 @@ check("Ollama：配置上限再高也不超过 8192（防 OOM 兜底）", () => 
     temperature: 0.2,
     maxTokens: 100_000,
     timeoutMs: 300_000,
+    streamIdleTimeoutMs: 90_000,
     debugLogging: false,
     debugLogFile: ""
   });
@@ -1364,6 +1368,7 @@ const unreachableProvider = new OllamaProvider({
   temperature: 0.2,
   maxTokens: 8_192,
   timeoutMs: 300_000,
+    streamIdleTimeoutMs: 90_000,
   debugLogging: false,
   debugLogFile: ""
 });
@@ -1500,6 +1505,7 @@ check("设置：holder 热切换后 current 立即指向新 provider", () => {
     llmTemperature: 0.2,
     llmMaxTokens: 12_000,
     llmTimeoutMs: 300_000,
+    llmStreamIdleTimeoutMs: 90_000,
     llmThinkingType: undefined,
     llmReasoningEffort: "minimal",
     llmDebugLogging: false,

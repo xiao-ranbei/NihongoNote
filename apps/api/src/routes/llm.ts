@@ -142,7 +142,8 @@ export function registerLlmRoutes(app: FastifyInstance, deps: LlmRouteDeps): voi
       // 设置未指定档位时回退到 env 默认（LLM_REASONING_EFFORT 有默认 minimal）
       llmReasoningEffort: settings.reasoningEffort ?? config.llmReasoningEffort,
       llmDebugLogging: config.llmDebugLogging,
-      llmDebugLogFile: config.llmDebugLogFile
+      llmDebugLogFile: config.llmDebugLogFile,
+      llmStreamIdleTimeoutMs: config.llmStreamIdleTimeoutMs
     };
     providerHolder.replace(buildLlmProvider(buildConfig));
     analysisService.updateSegmentFields(settings.segmentFields);
