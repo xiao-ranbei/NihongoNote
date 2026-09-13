@@ -62,7 +62,7 @@ M1.5 vitest ──> 为 M1.1 重构提供回归保护（应与 M1.1 同步进行
 | # | 工作项 | 需求 ID | 级别 | 交付物 |
 | --- | --- | --- | --- | --- |
 | M1.1 | ✅ 拆分 `App.tsx` 本体（S0 1763 → 937 → 本次 554 行） | MAINT-002 | L | 已完成（2026-09-13）：`useTheme` / `useLibrary` / `useServiceStatus` / `useComposer` / `useReadingSession` 五个 hooks，App 只剩视图切换与布局；6 个独立提交，每步可单独回退 |
-| M1.2 | 段级流式上屏（SSE） | STREAM-001/002/004/005 | L | 服务端事件流 + 前端 `streamAnalysis()` + 逐段合并 |
+| M1.2 | ✅ 段级流式上屏（SSE，第一阶段：批内逐段） | STREAM-001/002/004 | L | 已完成（2026-09-13）：`AnalysisStreamEvent` 契约入 core；段落校验+落库后立即 emit；SSE 端点（订阅即发快照 + 15s 心跳 + hijack 绕过序列化）；前端 EventSource 订阅替代 800ms 轮询。第二阶段（provider 流内逐段，接入 M1.3 扫描器）待做，将把首段延迟从「批完成」提前到「流内闭合」 |
 | M1.3 | ✅ 闭合对象扫描器 | STREAM-002 | M | 已完成（2026-09-13）：`json-stream-scanner.ts` —— 零依赖单遍状态机，只切「目标数组内已闭合的对象文本」，不解析不修复；13 条 vitest 用例（含 7 种分片粒度一致性、逐字符推送） |
 | M1.4 | 空闲超时与错误可见 | STREAM-003 | S | 上游空闲阈值 + 先推错误再中止 |
 | M1.5 | ✅ 引入 vitest | MAINT-003 | M | 已完成（2026-09-13）：`apps/api/vitest.config.ts` + `tests/`，`pnpm test` 根/包均可跑；首个测试文件覆盖装箱与估算 14 例。与 verify 的分工见 tech-stack-v2 §七 |
