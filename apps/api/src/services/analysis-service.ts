@@ -17,6 +17,7 @@ import {
 import { getDictionaryStats, getDictionaryVersion } from "../dictionary/lookup.js";
 import { DocumentRepository } from "../repositories/document-repository.js";
 import { packingSafetyRatio, planBatches } from "../llm-budget.js";
+import { classifyError, observability } from "../observability.js";
 import { estimateCost } from "../llm-pricing.js";
 import { prepareSegmentTokens } from "../segment-preparation.js";
 import type { ContentDictionaryHolder } from "../dictionary/content/index.js";
@@ -32,6 +33,10 @@ interface ActiveRun {
   id: symbol;
   controller: AbortController;
   completion: Promise<void>;
+  /** 开始时刻：duration_ms 的基准（OBS-002）。 */
+  startedAt: number;
+  /** 首个段落完成落库的时刻；null = 尚无段落完成（first_segment_ms 的度量，STREAM-005）。 */
+  firstSegmentAt: number | null;
 }
 
 function errorMessage(reason: unknown): string {
@@ -268,9 +273,13 @@ export class AnalysisService {
       const run: ActiveRun = {
         id: Symbol(documentId),
         controller: new AbortController(),
-        completion: Promise.resolve()
+        completion: Promise.resolve(),
+        startedAt: Date.now(),
+        firstSegmentAt: null
       };
       this.activeRuns.set(documentId, run);
+      // OBS：分析起点。事件只含 id 与时间，不含文章内容（PRIV-004）。
+      observability.write({ event: "analyze_start", documentId });
       run.completion = this.process(documentId, run, segmentFields);
     }
 
@@ -606,6 +615,15 @@ export class AnalysisService {
           segmentId: segment.id,
           analysis: merged
         });
+        // OBS：首段反馈时间（STREAM-005 的度量）——只记首个，后续段落不再重复
+        if (run.firstSegmentAt === null) {
+          run.firstSegmentAt = Date.now();
+          observability.write({
+            event: "analyze_first_segment",
+            documentId,
+            firstSegmentMs: run.firstSegmentAt - run.startedAt
+          });
+        }
       } catch (reason: unknown) {
         const failureMessage = errorMessage(reason);
         this.repository.markSegmentFailed(segment.id, failureMessage);
@@ -624,6 +642,9 @@ export class AnalysisService {
     run: ActiveRun,
     segmentFields: SegmentFieldProfile
   ): Promise<void> {
+    // 终态判定（OBS-001）：默认 cancelled——被取消或被新 run 取代时静默走到 finally。
+    let outcome: "success" | "error" | "cancelled" = "cancelled";
+    let failureMessage: string | null = null;
     try {
       while (this.isCurrent(documentId, run)) {
         const document = this.repository.getById(documentId);
@@ -665,17 +686,56 @@ export class AnalysisService {
         this.repository.finalizeDocumentAnalysis(documentId);
         this.emitProgress(documentId);
         this.emitStreamEvent({ type: "done", documentId });
+        outcome = "success";
       }
     } catch (reason: unknown) {
       if (this.isCurrent(documentId, run)) {
-        this.repository.markDocumentAnalysisFailed(documentId, errorMessage(reason));
+        failureMessage = errorMessage(reason);
+        this.repository.markDocumentAnalysisFailed(documentId, failureMessage);
         this.emitProgress(documentId);
         this.emitStreamEvent({ type: "done", documentId });
+        outcome = "error";
       }
     } finally {
       if (this.activeRuns.get(documentId)?.id === run.id) {
         this.activeRuns.delete(documentId);
       }
+      // OBS-001：每次分析恰好一个终态事件（成功/失败/取消都走到这里）
+      this.writeFinishEvent(documentId, run, outcome, failureMessage);
     }
+  }
+
+  /**
+   * 写分析终态事件（OBS-001/OBS-002）。
+   * 进度里的 usage/cost 是聚合数值，事件不含原文与译文（PRIV-004）。
+   */
+  private writeFinishEvent(
+    documentId: string,
+    run: ActiveRun,
+    outcome: "success" | "error" | "cancelled",
+    failureMessage: string | null
+  ): void {
+    if (!observability.enabled) {
+      return;
+    }
+    const progress = this.getProgress(documentId);
+    observability.write({
+      event: "analyze_finish",
+      documentId,
+      outcome,
+      durationMs: Date.now() - run.startedAt,
+      firstSegmentMs: run.firstSegmentAt === null ? null : run.firstSegmentAt - run.startedAt,
+      segments: progress
+        ? {
+            total: progress.totalSegments,
+            completed: progress.completedSegments,
+            failed: progress.failedSegments
+          }
+        : null,
+      usage: progress?.usage ?? null,
+      cost: progress?.cost ?? null,
+      errorCategory:
+        outcome === "error" && failureMessage !== null ? classifyError(failureMessage) : undefined
+    });
   }
 }

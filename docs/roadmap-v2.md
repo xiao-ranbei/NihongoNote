@@ -66,7 +66,7 @@ M1.5 vitest ──> 为 M1.1 重构提供回归保护（应与 M1.1 同步进行
 | M1.3 | ✅ 闭合对象扫描器 | STREAM-002 | M | 已完成（2026-09-13）：`json-stream-scanner.ts` —— 零依赖单遍状态机，只切「目标数组内已闭合的对象文本」，不解析不修复；13 条 vitest 用例（含 7 种分片粒度一致性、逐字符推送） |
 | M1.4 | 空闲超时与错误可见 | STREAM-003 | S | 上游空闲阈值 + 先推错误再中止 |
 | M1.5 | ✅ 引入 vitest | MAINT-003 | M | 已完成（2026-09-13）：`apps/api/vitest.config.ts` + `tests/`，`pnpm test` 根/包均可跑；首个测试文件覆盖装箱与估算 14 例。与 verify 的分工见 tech-stack-v2 §七 |
-| M1.6 | 请求指标与终态事件 | OBS-001/002/003/PRIV-004 | M | 本地 JSONL 事件 + `first_segment_ms` / `duration_ms` / `error_category` |
+| M1.6 | ✅ 请求指标与终态事件 | OBS-001/002/003/PRIV-004 | M | 已完成（2026-09-13）：`observability.ts`（默认关闭，`OBSERVABILITY_ENABLED` 开启写 `data/events.jsonl`）+ 分析埋点（`analyze_start` / `analyze_first_segment` / `analyze_finish` 终态三选一）。事件只含 id/数值/分类（PRIV-004）；设置页 UI 开关顺延 |
 | M1.7 | token 边界逐项对齐修复 | QUAL-001 | S | 校验从「一处不符即失败」改为「逐项对齐，仅补不丢」 |
 | M1.8 | 增量上屏的布局平滑 | PERF-002 | S | 新段淡入 + 高度过渡（CSS，无新依赖） |
 | M1.9 | 最小块保护（防小尾巴） | —（借鉴项，无对应需求 ID） | S | `planBatches` 增加最小块合并：尾批过短时并入前一批（受预算上限约束），避免固定开销被浪费 |

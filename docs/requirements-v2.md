@@ -178,15 +178,15 @@
 | PRIV-001 | 只监听本机 | 服务绑定 `127.0.0.1`，第一版不暴露公网 | ✅ |
 | PRIV-002 | 密钥不出服务端 | API key 只存服务端 `.env` 与数据库设置，前端只见脱敏值 | ✅ |
 | PRIV-003 | 日志不含正文 | 默认日志不记录完整文章与密钥；调试日志需显式开启且永不写 Authorization | ✅ |
-| PRIV-004 | 事件不含内容 | 可观测性事件只含分类与数值，不含原文、译文、密钥 | ❌ v2 新增 |
+| PRIV-004 | 事件不含内容 | 可观测性事件只含分类与数值，不含原文、译文、密钥 | ✅ 事件仅含 documentId、耗时、段数、错误分类、用量聚合 |
 
 ### 可观测性（v2 新增）
 
 | ID | 需求 | 验收标准 | 状态 |
 | --- | --- | --- | --- |
-| OBS-001 | 分析终态事件 | 每次分析**只发一个终态**（success/error/cancel），不重复计数 | ❌ |
-| OBS-002 | 关键指标 | 记录 `first_segment_ms`、`duration_ms`、`error_category`、token 用量与费用 | ❌ |
-| OBS-003 | 默认关闭可开启 | 事件日志默认关闭，设置页可开启；写本机 JSONL | ❌ |
+| OBS-001 | 分析终态事件 | 每次分析**只发一个终态**（success/error/cancel），不重复计数 | ✅ `analyze_finish` 在 process() 的 finally 里写，outcome 三态判定 |
+| OBS-002 | 关键指标 | 记录 `first_segment_ms`、`duration_ms`、`error_category`、token 用量与费用 | ✅ 落本机 JSONL（`analyze_start` / `analyze_first_segment` / `analyze_finish`） |
+| OBS-003 | 默认关闭可开启 | 事件日志默认关闭，设置页可开启；写本机 JSONL | 🟡 env 开关（`OBSERVABILITY_ENABLED`）已通；设置页 UI 开关未接 |
 
 ### 可维护性
 

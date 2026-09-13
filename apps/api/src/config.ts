@@ -63,6 +63,9 @@ const environmentSchema = z.object({
   LLM_SEGMENT_FIELDS: optionalSegmentFieldProfileSchema,
   LLM_DEBUG_LOGGING: booleanEnvironmentSchema,
   LLM_DEBUG_LOG_FILE: optionalStringSchema,
+  /** 可观测性事件日志（OBS-003）：默认关闭；开启后写本机 JSONL，只含数值与分类，不含原文。 */
+  OBSERVABILITY_ENABLED: booleanEnvironmentSchema,
+  OBSERVABILITY_LOG_FILE: optionalStringSchema,
   TTS_PROVIDER: z.string().min(1).default("disabled"),
   TTS_VOICE: optionalStringSchema,
   TTS_SPEED: optionalPositiveNumberSchema,
@@ -117,6 +120,11 @@ export const appConfig = {
   llmDebugLogFile: path.resolve(
     environment.LLM_DEBUG_LOG_FILE
       ?? path.resolve(environment.NIHONGO_DATA_DIR, "llm-debug.jsonl")
+  ),
+  observabilityEnabled: environment.OBSERVABILITY_ENABLED,
+  observabilityLogFile: path.resolve(
+    environment.OBSERVABILITY_LOG_FILE
+      ?? path.resolve(environment.NIHONGO_DATA_DIR, "events.jsonl")
   ),
   ttsProvider: environment.TTS_PROVIDER,
   ttsVoice: environment.TTS_VOICE,

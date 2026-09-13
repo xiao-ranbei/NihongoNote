@@ -4,6 +4,10 @@ import type { FastifyInstance } from "fastify";
 
 import { createApp } from "./app.js";
 import { appConfig } from "./config.js";
+import { observability } from "./observability.js";
+
+// OBS-003：默认关闭；OBSERVABILITY_ENABLED=1 时写本机 JSONL（不含原文/译文/密钥）。
+observability.configure(appConfig.observabilityEnabled, appConfig.observabilityLogFile);
 
 let app: FastifyInstance | undefined;
 
