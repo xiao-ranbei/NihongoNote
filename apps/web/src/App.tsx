@@ -3,9 +3,6 @@ import { useEffect, useState, type FormEvent, type ReactElement } from "react";
 import type {
   AnalysisProgress,
   ContentType,
-  DocumentDetail,
-  HealthResponse,
-  LlmBalance,
   TargetLevel,
   TokenAnalysisOverride,
   TokenCategory
@@ -16,8 +13,6 @@ import {
   cancelDocumentAnalysis,
   getAnalysisProgress,
   getDocument,
-  getHealth,
-  getLlmBalance,
   retrySegment,
   startDocumentAnalysis,
   updateDocument,
@@ -50,6 +45,7 @@ import {
 } from "./lib/format";
 import { themeOptions } from "./lib/storage";
 import { useLibrary } from "./hooks/useLibrary";
+import { useServiceStatus } from "./hooks/useServiceStatus";
 import { useTheme } from "./hooks/useTheme";
 import { SettingsPanel } from "./settings";
 import "./styles.css";
@@ -64,13 +60,11 @@ import "./styles.css";
 
 export default function App(): ReactElement {
   const [view, setView] = useState<"reader" | "tools" | "settings">("reader");
-  const [health, setHealth] = useState<HealthResponse | null>(null);
   const [selectedDocument, setSelectedDocument] = useState<MvpDocument | null>(null);
   const [title, setTitle] = useState("");
   const [sourceText, setSourceText] = useState("");
   const [contentType, setContentType] = useState<ContentType>("article");
   const [targetLevel, setTargetLevel] = useState<TargetLevel>("auto");
-  const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isStartingAnalysis, setIsStartingAnalysis] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
@@ -82,7 +76,6 @@ export default function App(): ReactElement {
   const [selectedTokenId, setSelectedTokenId] = useState<string | null>(null);
   const [retryingSegmentId, setRetryingSegmentId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [llmBalance, setLlmBalance] = useState<LlmBalance | null>(null);
   const { themePreference, setThemePreference } = useTheme();
   const {
     documents,
@@ -95,49 +88,7 @@ export default function App(): ReactElement {
     setLibraryStatus,
     refreshLibrary
   } = useLibrary({ onError: setError });
-
-  useEffect(() => {
-    void getHealth()
-      .then((healthResponse) => {
-        setHealth(healthResponse);
-      })
-      .catch((reason: unknown) => {
-        setError(reason instanceof Error ? reason.message : "无法连接到本机 API");
-      })
-      .finally(() => {
-        setIsLoading(false);
-      });
-  }, []);
-
-  // 余额查询是附加信息：未配置 provider / 查询失败都静默降级为 null（UI 显示「余额未知」），
-  // 不阻塞页面也不弹错误横幅。设置页保存后（provider 可能变化）会再次调用 refreshBalance。
-  function refreshBalance(): void {
-    void getLlmBalance()
-      .then((balance) => {
-        setLlmBalance(balance);
-      })
-      .catch(() => {
-        setLlmBalance(null);
-      });
-  }
-
-  useEffect(() => {
-    let cancelled = false;
-    void getLlmBalance()
-      .then((balance) => {
-        if (!cancelled) {
-          setLlmBalance(balance);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setLlmBalance(null);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const { health, isLoading, llmBalance, refreshBalance } = useServiceStatus({ onError: setError });
 
   useEffect(() => {
     const documentId = selectedDocument?.id;
