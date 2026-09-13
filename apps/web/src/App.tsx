@@ -18,7 +18,6 @@ import {
   getDocument,
   getHealth,
   getLlmBalance,
-  listDocuments,
   retrySegment,
   startDocumentAnalysis,
   updateDocument,
@@ -31,7 +30,7 @@ import { renderArticle } from "./components/ArticleSurface";
 import { DocumentMetadataEditor } from "./components/DocumentMetadataEditor";
 import { SegmentAnalysisPanel } from "./components/SegmentAnalysisPanel";
 import { TokenPopover } from "./components/TokenPopover";
-import type { LibraryStatus, MvpDocument, MvpDocumentSummary } from "./lib/constants";
+import type { LibraryStatus, MvpDocument } from "./lib/constants";
 import {
   contentTypeOptions,
   documentContentType,
@@ -49,12 +48,8 @@ import {
   safeFileStem,
   statusLabel
 } from "./lib/format";
-import {
-  isLibraryStatus,
-  libraryStorageKeys,
-  storedValue,
-  themeOptions
-} from "./lib/storage";
+import { themeOptions } from "./lib/storage";
+import { useLibrary } from "./hooks/useLibrary";
 import { useTheme } from "./hooks/useTheme";
 import { SettingsPanel } from "./settings";
 import "./styles.css";
@@ -70,14 +65,12 @@ import "./styles.css";
 export default function App(): ReactElement {
   const [view, setView] = useState<"reader" | "tools" | "settings">("reader");
   const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [documents, setDocuments] = useState<MvpDocumentSummary[]>([]);
   const [selectedDocument, setSelectedDocument] = useState<MvpDocument | null>(null);
   const [title, setTitle] = useState("");
   const [sourceText, setSourceText] = useState("");
   const [contentType, setContentType] = useState<ContentType>("article");
   const [targetLevel, setTargetLevel] = useState<TargetLevel>("auto");
   const [isLoading, setIsLoading] = useState(true);
-  const [isLibraryLoading, setIsLibraryLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isStartingAnalysis, setIsStartingAnalysis] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
@@ -88,19 +81,20 @@ export default function App(): ReactElement {
   const [selectedSegmentId, setSelectedSegmentId] = useState<string | null>(null);
   const [selectedTokenId, setSelectedTokenId] = useState<string | null>(null);
   const [retryingSegmentId, setRetryingSegmentId] = useState<string | null>(null);
-  const [isLibraryOpen, setIsLibraryOpen] = useState(
-    () => storedValue(libraryStorageKeys.open) !== "false"
-  );
-  const [librarySearch, setLibrarySearch] = useState(
-    () => storedValue(libraryStorageKeys.search) ?? ""
-  );
-  const [libraryStatus, setLibraryStatus] = useState<LibraryStatus>(() => {
-    const value = storedValue(libraryStorageKeys.status);
-    return isLibraryStatus(value) ? value : "all";
-  });
   const [error, setError] = useState<string | null>(null);
   const [llmBalance, setLlmBalance] = useState<LlmBalance | null>(null);
   const { themePreference, setThemePreference } = useTheme();
+  const {
+    documents,
+    isLibraryLoading,
+    isLibraryOpen,
+    setIsLibraryOpen,
+    librarySearch,
+    setLibrarySearch,
+    libraryStatus,
+    setLibraryStatus,
+    refreshLibrary
+  } = useLibrary({ onError: setError });
 
   useEffect(() => {
     void getHealth()
@@ -146,57 +140,6 @@ export default function App(): ReactElement {
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    const timer = window.setTimeout(() => {
-      setIsLibraryLoading(true);
-      void listDocuments({
-        search: librarySearch,
-        status: libraryStatus === "all" ? undefined : libraryStatus
-      })
-        .then((documentList) => {
-          if (!cancelled) {
-            setDocuments(documentList);
-          }
-        })
-        .catch((reason: unknown) => {
-          if (!cancelled) {
-            setError(reason instanceof Error ? reason.message : "读取学习库失败");
-          }
-        })
-        .finally(() => {
-          if (!cancelled) {
-            setIsLibraryLoading(false);
-          }
-        });
-    }, librarySearch.trim().length > 0 ? 220 : 0);
-
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [librarySearch, libraryStatus]);
-
-  useEffect(() => {
-    window.localStorage.setItem(libraryStorageKeys.open, String(isLibraryOpen));
-  }, [isLibraryOpen]);
-
-  useEffect(() => {
-    window.localStorage.setItem(libraryStorageKeys.search, librarySearch);
-  }, [librarySearch]);
-
-  useEffect(() => {
-    window.localStorage.setItem(libraryStorageKeys.status, libraryStatus);
-  }, [libraryStatus]);
-
-  async function refreshLibrary(): Promise<void> {
-    const documentList = await listDocuments({
-      search: librarySearch,
-      status: libraryStatus === "all" ? undefined : libraryStatus
-    });
-    setDocuments(documentList);
-  }
-
-  useEffect(() => {
     const documentId = selectedDocument?.id;
     if (!documentId || analysisProgress?.status !== "analyzing") {
       return;
@@ -216,16 +159,10 @@ export default function App(): ReactElement {
         }
         setAnalysisProgress(progress);
         if (progress.status !== "analyzing") {
-          const [document, documentList] = await Promise.all([
-            getDocument(documentId),
-            listDocuments({
-              search: librarySearch,
-              status: libraryStatus === "all" ? undefined : libraryStatus
-            })
-          ]);
+          // 收尾时同步刷新当前文章与学习库列表；refreshLibrary 内部按当前筛选条件请求。
+          const [document] = await Promise.all([getDocument(documentId), refreshLibrary()]);
           if (!cancelled) {
             setSelectedDocument(document);
-            setDocuments(documentList);
           }
         }
       } catch (reason: unknown) {
@@ -335,16 +272,12 @@ export default function App(): ReactElement {
     setError(null);
     try {
       const progress = await cancelDocumentAnalysis(selectedDocument.id);
-      const [document, documentList] = await Promise.all([
+      const [document] = await Promise.all([
         getDocument(selectedDocument.id),
-        listDocuments({
-          search: librarySearch,
-          status: libraryStatus === "all" ? undefined : libraryStatus
-        })
+        refreshLibrary()
       ]);
       setAnalysisProgress(progress);
       setSelectedDocument(document);
-      setDocuments(documentList);
     } catch (reason: unknown) {
       setError(reason instanceof Error ? reason.message : "取消分析失败");
     } finally {
