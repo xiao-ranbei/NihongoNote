@@ -1,50 +1,29 @@
-import { useEffect, useState, type ReactElement } from "react";
+import { useState, type ReactElement } from "react";
 
-import type {
-  AnalysisProgress,
-  ContentType,
-  TargetLevel,
-  TokenAnalysisOverride,
-  TokenCategory
-} from "@nihongonote/core";
+import type { ContentType, TargetLevel, TokenCategory } from "@nihongonote/core";
 
-import {
-  cancelDocumentAnalysis,
-  getAnalysisProgress,
-  getDocument,
-  retrySegment,
-  startDocumentAnalysis,
-  updateDocument,
-  updateSegment,
-  updateSegmentAnalysis,
-  type SegmentAnalysisUpdateInput
-} from "./api/client";
 import { AnalysisTools } from "./analysis-tools";
 import { renderArticle } from "./components/ArticleSurface";
 import { DocumentMetadataEditor } from "./components/DocumentMetadataEditor";
 import { SegmentAnalysisPanel } from "./components/SegmentAnalysisPanel";
 import { TokenPopover } from "./components/TokenPopover";
-import type { LibraryStatus, MvpDocument } from "./lib/constants";
+import type { LibraryStatus } from "./lib/constants";
 import {
   contentTypeOptions,
-  documentContentType,
-  exportFormatVersion,
   levelOptions,
   tokenCategoryLabels
 } from "./lib/constants";
 import {
   balanceSummary,
   contentTypeLabel,
-  downloadFile,
-  fileStamp,
   formatCost,
   formatDate,
-  safeFileStem,
   statusLabel
 } from "./lib/format";
 import { themeOptions } from "./lib/storage";
 import { useComposer } from "./hooks/useComposer";
 import { useLibrary } from "./hooks/useLibrary";
+import { useReadingSession } from "./hooks/useReadingSession";
 import { useServiceStatus } from "./hooks/useServiceStatus";
 import { useTheme } from "./hooks/useTheme";
 import { SettingsPanel } from "./settings";
@@ -60,16 +39,6 @@ import "./styles.css";
 
 export default function App(): ReactElement {
   const [view, setView] = useState<"reader" | "tools" | "settings">("reader");
-  const [selectedDocument, setSelectedDocument] = useState<MvpDocument | null>(null);
-  const [isStartingAnalysis, setIsStartingAnalysis] = useState(false);
-  const [isCancelling, setIsCancelling] = useState(false);
-  const [isEditingDocument, setIsEditingDocument] = useState(false);
-  const [isSavingDocument, setIsSavingDocument] = useState(false);
-  const [isSavingSegment, setIsSavingSegment] = useState(false);
-  const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgress | null>(null);
-  const [selectedSegmentId, setSelectedSegmentId] = useState<string | null>(null);
-  const [selectedTokenId, setSelectedTokenId] = useState<string | null>(null);
-  const [retryingSegmentId, setRetryingSegmentId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const { themePreference, setThemePreference } = useTheme();
   const {
@@ -85,6 +54,43 @@ export default function App(): ReactElement {
   } = useLibrary({ onError: setError });
   const { health, isLoading, llmBalance, refreshBalance } = useServiceStatus({ onError: setError });
   const {
+    document: selectedDocument,
+    progress: analysisProgress,
+    selectedSegmentId,
+    selectedTokenId,
+    selectedSegment,
+    selectedToken,
+    isAnalysisRunning,
+    isStartingAnalysis,
+    isCancelling,
+    isEditingDocument,
+    setIsEditingDocument,
+    isSavingDocument,
+    isSavingSegment,
+    retryingSegmentId,
+    openDocument: handleSelectDocument,
+    adoptDocument,
+    closeDocument,
+    selectSegment,
+    selectToken,
+    clearTokenSelection,
+    startAnalysis: handleStartAnalysis,
+    cancelAnalysis: handleCancelAnalysis,
+    retrySegment: handleRetrySegment,
+    saveDocumentMetadata: handleSaveDocumentMetadata,
+    saveSegment: handleSaveSegment,
+    saveToken: handleSaveToken,
+    exportSourceText: handleExportSourceText,
+    exportAnalysisJson: handleExportAnalysisJson
+  } = useReadingSession({
+    onError: setError,
+    onLibraryChanged: refreshLibrary,
+    onDocumentMetadataChanged: (nextContentType, nextTargetLevel) => {
+      setContentType(nextContentType);
+      setTargetLevel(nextTargetLevel);
+    }
+  });
+  const {
     title,
     setTitle,
     sourceText,
@@ -97,12 +103,7 @@ export default function App(): ReactElement {
     submit: handleCreateDocument,
     reset: resetComposer
   } = useComposer({
-    onCreated: (document, progress) => {
-      setSelectedDocument(document);
-      setSelectedSegmentId(document.segments[0]?.id ?? null);
-      setSelectedTokenId(null);
-      setAnalysisProgress(progress);
-    },
+    onCreated: adoptDocument,
     onError: setError,
     onLibraryChanged: () => {
       void refreshLibrary().catch((reason: unknown) => {
@@ -111,236 +112,11 @@ export default function App(): ReactElement {
     }
   });
 
-  useEffect(() => {
-    const documentId = selectedDocument?.id;
-    if (!documentId || analysisProgress?.status !== "analyzing") {
-      return;
-    }
-
-    let cancelled = false;
-    let inFlight = false;
-    const poll = async (): Promise<void> => {
-      if (cancelled || inFlight) {
-        return;
-      }
-      inFlight = true;
-      try {
-        const progress = await getAnalysisProgress(documentId);
-        if (cancelled) {
-          return;
-        }
-        setAnalysisProgress(progress);
-        if (progress.status !== "analyzing") {
-          // 收尾时同步刷新当前文章与学习库列表；refreshLibrary 内部按当前筛选条件请求。
-          const [document] = await Promise.all([getDocument(documentId), refreshLibrary()]);
-          if (!cancelled) {
-            setSelectedDocument(document);
-          }
-        }
-      } catch (reason: unknown) {
-        if (!cancelled) {
-          setError(reason instanceof Error ? reason.message : "读取分析进度失败");
-        }
-      } finally {
-        inFlight = false;
-      }
-    };
-    const timer = window.setInterval(() => {
-      void poll();
-    }, 800);
-    void poll();
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [analysisProgress?.status, selectedDocument?.id, librarySearch, libraryStatus]);
-
-  async function handleSelectDocument(documentId: string): Promise<void> {
-    setError(null);
-    try {
-      const [document, progress] = await Promise.all([
-        getDocument(documentId),
-        getAnalysisProgress(documentId)
-      ]);
-      setSelectedDocument(document);
-      setSelectedSegmentId(document.segments[0]?.id ?? null);
-      setSelectedTokenId(null);
-      setContentType(documentContentType(document));
-      setTargetLevel(document.targetLevel);
-      setAnalysisProgress(progress);
-    } catch (reason: unknown) {
-      setError(reason instanceof Error ? reason.message : "读取文章失败");
-    }
-  }
-
   function handleNewDocument(): void {
     setError(null);
-    setSelectedDocument(null);
-    setIsEditingDocument(false);
-    setSelectedSegmentId(null);
-    setSelectedTokenId(null);
-    setAnalysisProgress(null);
+    closeDocument();
     resetComposer();
   }
-
-  async function handleStartAnalysis(): Promise<void> {
-    if (!selectedDocument) {
-      return;
-    }
-
-    setIsStartingAnalysis(true);
-    setError(null);
-    try {
-      setAnalysisProgress(await startDocumentAnalysis(selectedDocument.id));
-    } catch (reason: unknown) {
-      setError(reason instanceof Error ? reason.message : "启动分析失败");
-    } finally {
-      setIsStartingAnalysis(false);
-    }
-  }
-
-  async function handleCancelAnalysis(): Promise<void> {
-    if (!selectedDocument) {
-      return;
-    }
-
-    setIsCancelling(true);
-    setError(null);
-    try {
-      const progress = await cancelDocumentAnalysis(selectedDocument.id);
-      const [document] = await Promise.all([
-        getDocument(selectedDocument.id),
-        refreshLibrary()
-      ]);
-      setAnalysisProgress(progress);
-      setSelectedDocument(document);
-    } catch (reason: unknown) {
-      setError(reason instanceof Error ? reason.message : "取消分析失败");
-    } finally {
-      setIsCancelling(false);
-    }
-  }
-
-  function handleExportSourceText(): void {
-    if (!selectedDocument) {
-      return;
-    }
-    const stem = safeFileStem(selectedDocument.title);
-    downloadFile(`${stem}-原文-${fileStamp()}.txt`, selectedDocument.sourceText, "text/plain");
-  }
-
-  /*
-   * 导出解析 JSON（需求 5.5 / issues I-27）。
-   * DocumentDetail 已含 sourceText / contentBlocks / segments（含 AI 解析与人工修正版本），
-   * 因此纯前端即可完成，无需新增后端端点。
-   */
-  function handleExportAnalysisJson(): void {
-    if (!selectedDocument) {
-      return;
-    }
-    const stem = safeFileStem(selectedDocument.title);
-    const payload = {
-      format: "nihongonote-document",
-      formatVersion: exportFormatVersion,
-      exportedAt: new Date().toISOString(),
-      document: selectedDocument
-    };
-    downloadFile(
-      `${stem}-解析-${fileStamp()}.json`,
-      JSON.stringify(payload, null, 2),
-      "application/json"
-    );
-  }
-
-  async function handleRetrySegment(segmentId: string): Promise<void> {
-    setRetryingSegmentId(segmentId);
-    setError(null);
-    try {
-      setAnalysisProgress(await retrySegment(segmentId));
-    } catch (reason: unknown) {
-      setError(reason instanceof Error ? reason.message : "重试句段失败");
-    } finally {
-      setRetryingSegmentId(null);
-    }
-  }
-
-  async function handleSaveDocumentMetadata(input: {
-    title: string;
-    contentType: ContentType;
-    targetLevel: TargetLevel;
-  }): Promise<void> {
-    if (!selectedDocument) {
-      return;
-    }
-
-    setIsSavingDocument(true);
-    setError(null);
-    try {
-      const document = await updateDocument(selectedDocument.id, input);
-      setSelectedDocument(document);
-      setContentType(document.contentType);
-      setTargetLevel(document.targetLevel);
-      setIsEditingDocument(false);
-      void refreshLibrary().catch((reason: unknown) => {
-        setError(reason instanceof Error ? reason.message : "刷新学习库失败");
-      });
-    } catch (reason: unknown) {
-      setError(reason instanceof Error ? reason.message : "保存文章设置失败");
-    } finally {
-      setIsSavingDocument(false);
-    }
-  }
-
-  async function handleSaveSegment(
-    segmentId: string,
-    speaker: string | null,
-    analysis: SegmentAnalysisUpdateInput | null
-  ): Promise<void> {
-    setIsSavingSegment(true);
-    setError(null);
-    try {
-      const updatedSegment = await updateSegment(segmentId, { speaker });
-      let document = await getDocument(updatedSegment.documentId);
-      if (analysis) {
-        await updateSegmentAnalysis(segmentId, analysis);
-        document = await getDocument(document.id);
-      }
-      setSelectedDocument(document);
-      void refreshLibrary().catch((reason: unknown) => {
-        setError(reason instanceof Error ? reason.message : "刷新学习库失败");
-      });
-    } catch (reason: unknown) {
-      setError(reason instanceof Error ? reason.message : "保存句段修改失败");
-    } finally {
-      setIsSavingSegment(false);
-    }
-  }
-
-  async function handleSaveToken(
-    segmentId: string,
-    override: TokenAnalysisOverride
-  ): Promise<void> {
-    setIsSavingSegment(true);
-    setError(null);
-    try {
-      const segment = await updateSegmentAnalysis(segmentId, { tokens: [override] });
-      const document = await getDocument(segment.documentId);
-      setSelectedDocument(document);
-      void refreshLibrary().catch((reason: unknown) => {
-        setError(reason instanceof Error ? reason.message : "刷新学习库失败");
-      });
-    } catch (reason: unknown) {
-      setError(reason instanceof Error ? reason.message : "保存词语修改失败");
-    } finally {
-      setIsSavingSegment(false);
-    }
-  }
-
-  const selectedSegment = selectedDocument?.segments.find((segment) => segment.id === selectedSegmentId) ?? null;
-  const selectedToken = selectedSegment?.analysis?.tokens.find((token) => token.tokenId === selectedTokenId) ?? null;
-  const isAnalysisRunning = analysisProgress?.status === "analyzing"
-    || selectedDocument?.status === "analyzing";
 
   return (
     <div className="app-shell">
@@ -726,14 +502,8 @@ export default function App(): ReactElement {
                         selectedDocument,
                         selectedSegmentId,
                         selectedTokenId,
-                        (segmentId) => {
-                          setSelectedSegmentId(segmentId);
-                          setSelectedTokenId(null);
-                        },
-                        (segmentId, tokenId) => {
-                          setSelectedSegmentId(segmentId);
-                          setSelectedTokenId(tokenId);
-                        }
+                        selectSegment,
+                        selectToken
                       )}
                     </div>
                     {selectedToken ? null : (
@@ -758,7 +528,7 @@ export default function App(): ReactElement {
                   {selectedToken && selectedSegment ? (
                     <TokenPopover
                       isSaving={isSavingSegment}
-                      onClose={() => setSelectedTokenId(null)}
+                      onClose={clearTokenSelection}
                       onSave={(_tokenId, override) => handleSaveToken(selectedSegment.id, override)}
                       token={selectedToken}
                     />
