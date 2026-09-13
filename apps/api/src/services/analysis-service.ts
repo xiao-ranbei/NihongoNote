@@ -43,8 +43,8 @@ function errorMessage(reason: unknown): string {
   return reason instanceof Error ? reason.message : "分析失败，原因未知";
 }
 
-function validateAnalysis(
-  segment: Segment,
+export function validateAnalysis(
+  segment: Pick<Segment, "id">,
   analysis: SegmentAnalysis,
   tokenBoundaries: TokenBoundary[]
 ): SegmentAnalysis {
@@ -53,14 +53,9 @@ function validateAnalysis(
     throw new Error(`LLM returned an unexpected segment ID: ${parsed.segmentId}`);
   }
 
-  if (parsed.tokens.length !== tokenBoundaries.length) {
-    throw new Error(
-      `LLM returned ${parsed.tokens.length} token analyses for segment ${segment.id}; expected ${tokenBoundaries.length}`
-    );
-  }
-
   const boundariesById = new Map(tokenBoundaries.map((boundary) => [boundary.tokenId, boundary]));
   const tokenIds = new Set<string>();
+  const aligned: TokenAnalysis[] = [];
   for (const token of parsed.tokens) {
     if (tokenIds.has(token.tokenId)) {
       throw new Error(`LLM returned duplicate token ID: ${token.tokenId}`);
@@ -72,15 +67,42 @@ function validateAnalysis(
       throw new Error(`LLM returned an unexpected token ID: ${token.tokenId}`);
     }
     if (
-      token.startOffset !== boundary.startOffset
-      || token.endOffset !== boundary.endOffset
-      || token.surface !== boundary.surface
+      token.startOffset === boundary.startOffset
+      && token.endOffset === boundary.endOffset
+      && token.surface === boundary.surface
     ) {
-      throw new Error(`Token ${token.tokenId} does not match the local token boundary`);
+      aligned.push(token);
+      continue;
     }
+    // QUAL-001 对齐修复之一：tokenId 匹配但 surface/offset 抄错 → 以本地边界回填。
+    // 本地分词是唯一权威、模型只负责填空；抄写偏差不值得让整段失败重试。
+    aligned.push({
+      ...token,
+      startOffset: boundary.startOffset,
+      endOffset: boundary.endOffset,
+      surface: boundary.surface
+    });
   }
 
-  return parsed;
+  // QUAL-001 对齐修复之二：模型漏答个别 token → 补「未提供」占位（仅补不丢）。
+  // 占位省略全部解释字段（与瘦身存储同款、不落库恒定 null），confidence 为 null；
+  // UI 显示为无解释的普通词——好过同段其余正确字段一起作废、再花一轮请求重试整段。
+  const missingPlaceholders: TokenAnalysis[] = tokenBoundaries
+    .filter((boundary) => !tokenIds.has(boundary.tokenId))
+    .map((boundary) => ({
+      tokenId: boundary.tokenId,
+      startOffset: boundary.startOffset,
+      endOffset: boundary.endOffset,
+      surface: boundary.surface,
+      // 占位无词性信息，用最常见的 word 兜底；解释字段整体省略（瘦身存储同款，不落恒定 null）
+      category: "word",
+      confidence: null
+    }));
+  if (missingPlaceholders.length > 0) {
+    aligned.push(...missingPlaceholders);
+  }
+
+  return { ...parsed, tokens: aligned };
 }
 
 /**
@@ -92,7 +114,7 @@ function validateAnalysis(
  * - 附加 schemaVersion（I-7）与 dictionaryCoverage（设计文档 3.7）。
  */
 export function mergeAnalysis(
-  segment: Segment,
+  segment: Pick<Segment, "id">,
   boundaries: TokenBoundary[],
   localTokens: TokenAnalysis[],
   llmAnalysis: SegmentAnalysis
