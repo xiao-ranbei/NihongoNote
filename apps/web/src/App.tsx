@@ -51,13 +51,11 @@ import {
 } from "./lib/format";
 import {
   isLibraryStatus,
-  isThemePreference,
   libraryStorageKeys,
-  resolveThemeName,
   storedValue,
-  themeOptions,
-  themeStorageKey
+  themeOptions
 } from "./lib/storage";
+import { useTheme } from "./hooks/useTheme";
 import { SettingsPanel } from "./settings";
 import "./styles.css";
 
@@ -102,28 +100,7 @@ export default function App(): ReactElement {
   });
   const [error, setError] = useState<string | null>(null);
   const [llmBalance, setLlmBalance] = useState<LlmBalance | null>(null);
-  const [themePreference, setThemePreference] = useState<string>(() => {
-    const value = storedValue(themeStorageKey);
-    return isThemePreference(value) ? value : "auto";
-  });
-
-  /*
-   * 主题持久化 + 系统深色跟随（I-14）。
-   * auto 时仍监听媒体查询，系统切换深色即刻生效，无需刷新。
-   */
-  useEffect(() => {
-    const applyTheme = (): void => {
-      document.documentElement.dataset.theme = resolveThemeName(themePreference);
-    };
-    applyTheme();
-    window.localStorage.setItem(themeStorageKey, themePreference);
-    if (typeof window.matchMedia !== "function") {
-      return;
-    }
-    const media = window.matchMedia("(prefers-color-scheme: dark)");
-    media.addEventListener("change", applyTheme);
-    return () => media.removeEventListener("change", applyTheme);
-  }, [themePreference]);
+  const { themePreference, setThemePreference } = useTheme();
 
   useEffect(() => {
     void getHealth()
