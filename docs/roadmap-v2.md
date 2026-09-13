@@ -65,7 +65,7 @@ M1.5 vitest ──> 为 M1.1 重构提供回归保护（应与 M1.1 同步进行
 | M1.2 | 段级流式上屏（SSE） | STREAM-001/002/004/005 | L | 服务端事件流 + 前端 `streamAnalysis()` + 逐段合并 |
 | M1.3 | 闭合对象扫描器 | STREAM-002 | M | `json-stream-scanner.ts` + 离线断言 |
 | M1.4 | 空闲超时与错误可见 | STREAM-003 | S | 上游空闲阈值 + 先推错误再中止 |
-| M1.5 | 引入 vitest | MAINT-003 | M | 测试框架 + 关键路径用例迁移 |
+| M1.5 | ✅ 引入 vitest | MAINT-003 | M | 已完成（2026-09-13）：`apps/api/vitest.config.ts` + `tests/`，`pnpm test` 根/包均可跑；首个测试文件覆盖装箱与估算 14 例。与 verify 的分工见 tech-stack-v2 §七 |
 | M1.6 | 请求指标与终态事件 | OBS-001/002/003/PRIV-004 | M | 本地 JSONL 事件 + `first_segment_ms` / `duration_ms` / `error_category` |
 | M1.7 | token 边界逐项对齐修复 | QUAL-001 | S | 校验从「一处不符即失败」改为「逐项对齐，仅补不丢」 |
 | M1.8 | 增量上屏的布局平滑 | PERF-002 | S | 新段淡入 + 高度过渡（CSS，无新依赖） |

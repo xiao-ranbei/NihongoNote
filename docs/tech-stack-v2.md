@@ -53,7 +53,7 @@
 | 候选 | 现状 | 收益 | 风险 / 前置验证 | 建议阶段 |
 | --- | --- | --- | --- | --- |
 | **`node:sqlite` 替代 sql.js** | WASM，每次写要整库 `export()` | 真正的增量写盘、原生性能、去掉 9.3MB WASM 与延迟落盘逻辑 | Node 内置模块仍在演进（API 稳定性需按目标 Node 版本确认）；迁移需重写 `db/database.ts` 适配层（好在只影响一个文件） | M3 评估，M4 决定 |
-| **vitest** | 只有 `verify-pipeline.ts` 脚本（93 断言） | watch 模式、前端组件可直接测、失败定位更细 | 新增依赖；需把现有断言迁移，不能一次全迁 | **M1 引入**（拆 `App.tsx` 需要测试保护） |
+| ~~**vitest**~~ **已引入（2026-09-13）** | 原只有 `verify-pipeline.ts` 脚本 | watch 模式、细粒度单元测试、失败定位更细；前端 hooks 测试的唯一可行途径 | 已落地：`apps/api/vitest.config.ts` + `tests/`，`pnpm test`（根/包都可跑）。`NodeNext` 要求的 `.js` 后缀由 vite alias 剥除。分工见 §七 |
 | **ESLint 9（flat config）** | 无 | 统一风格、提前发现未使用导出与 `any` 泄漏 | 与 5 个包配置需协调 | M3 |
 | **`@sglkc/kuromoji` 或其他 fork** | kuromoji 0.1.2 长期未更新 | 安全性、可能的字典优化 | 需验证输出与现有一致（`morphology.ts` 已隔离，替换面小） | 有维护风险时再说 |
 | **词典索引从 JSON 转到 SQLite FTS** | 9.3MB JSON 全量载入内存 | 索引再扩大时内存可控、支持模糊查询 | 当前 9.3MB 完全可接受，属于过度优化 | 暂不做，设阈值（>50MB 再评估） |
@@ -98,9 +98,10 @@
 | --- | --- |
 | Node | 22 LTS 起（当前环境 22 / 24 均可用）；数据库迁移评估时以 22 LTS 为准 |
 | 包管理 | pnpm 10；`pnpm-lock.yaml` 入库 |
-| 类型检查门槛 | `pnpm typecheck` 必须全绿（含 `apps/api/scripts`） |
-| 提交前自检 | `pnpm typecheck` + `pnpm --filter @nihongonote/api verify` |
-| CI | 无（本机自用）；上述两条作为人工门槛 |
+| 类型检查门槛 | `pnpm typecheck` 必须全绿（含 `apps/api/scripts` 与 `apps/api/tests`） |
+| 测试分层 | `pnpm test`（vitest）= 纯函数与边界的细粒度单元测试，支持 watch；`verify` = 端到端自检（子进程崩溃补写、落盘时序、真实 kuromoji、provider 装配）。两者都保留，核心路径**有意重复覆盖** |
+| 提交前自检 | `pnpm typecheck` + `pnpm test` + `pnpm --filter @nihongonote/api verify` |
+| CI | 无（本机自用）；上述三条作为人工门槛 |
 | 密钥 | 只在 `.env` 与数据库 `app_settings`；两者都不入 Git |
 | 大文件 | `data/jmdict-common-index.json`（9.3MB）不入库，由 `build:jmdict-index` 重建 |
 | 新增依赖流程 | ① 说清「为什么不自己写」② 评估体积与维护状态 ③ 通过接口隔离，保证可替换 |

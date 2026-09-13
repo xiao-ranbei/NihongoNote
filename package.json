@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "pnpm --filter @nihongonote/core build && concurrently --kill-others-on-fail \"pnpm --filter @nihongonote/api dev\" \"pnpm --filter @nihongonote/web dev\"",
     "build": "pnpm -r build",
+    "test": "pnpm -r test",
     "typecheck": "pnpm --filter @nihongonote/core build && pnpm -r typecheck"
   },
   "pnpm": {
