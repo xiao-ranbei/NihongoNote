@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent, type ReactElement } from "react";
+import { useEffect, useState, type ReactElement } from "react";
 
 import type {
   AnalysisProgress,
@@ -9,7 +9,6 @@ import type {
 } from "@nihongonote/core";
 
 import {
-  createDocument,
   cancelDocumentAnalysis,
   getAnalysisProgress,
   getDocument,
@@ -44,6 +43,7 @@ import {
   statusLabel
 } from "./lib/format";
 import { themeOptions } from "./lib/storage";
+import { useComposer } from "./hooks/useComposer";
 import { useLibrary } from "./hooks/useLibrary";
 import { useServiceStatus } from "./hooks/useServiceStatus";
 import { useTheme } from "./hooks/useTheme";
@@ -61,11 +61,6 @@ import "./styles.css";
 export default function App(): ReactElement {
   const [view, setView] = useState<"reader" | "tools" | "settings">("reader");
   const [selectedDocument, setSelectedDocument] = useState<MvpDocument | null>(null);
-  const [title, setTitle] = useState("");
-  const [sourceText, setSourceText] = useState("");
-  const [contentType, setContentType] = useState<ContentType>("article");
-  const [targetLevel, setTargetLevel] = useState<TargetLevel>("auto");
-  const [isSaving, setIsSaving] = useState(false);
   const [isStartingAnalysis, setIsStartingAnalysis] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
   const [isEditingDocument, setIsEditingDocument] = useState(false);
@@ -89,6 +84,32 @@ export default function App(): ReactElement {
     refreshLibrary
   } = useLibrary({ onError: setError });
   const { health, isLoading, llmBalance, refreshBalance } = useServiceStatus({ onError: setError });
+  const {
+    title,
+    setTitle,
+    sourceText,
+    setSourceText,
+    contentType,
+    setContentType,
+    targetLevel,
+    setTargetLevel,
+    isSaving,
+    submit: handleCreateDocument,
+    reset: resetComposer
+  } = useComposer({
+    onCreated: (document, progress) => {
+      setSelectedDocument(document);
+      setSelectedSegmentId(document.segments[0]?.id ?? null);
+      setSelectedTokenId(null);
+      setAnalysisProgress(progress);
+    },
+    onError: setError,
+    onLibraryChanged: () => {
+      void refreshLibrary().catch((reason: unknown) => {
+        setError(reason instanceof Error ? reason.message : "刷新学习库失败");
+      });
+    }
+  });
 
   useEffect(() => {
     const documentId = selectedDocument?.id;
@@ -135,38 +156,6 @@ export default function App(): ReactElement {
     };
   }, [analysisProgress?.status, selectedDocument?.id, librarySearch, libraryStatus]);
 
-  async function handleCreateDocument(event: FormEvent<HTMLFormElement>): Promise<void> {
-    event.preventDefault();
-    if (!sourceText.trim()) {
-      setError("请先粘贴一段日语文章或对话");
-      return;
-    }
-
-    setIsSaving(true);
-    setError(null);
-    try {
-      const document = await createDocument({
-        title: title.trim() || undefined,
-        sourceText,
-        contentType,
-        targetLevel
-      });
-      setSelectedDocument(document);
-      setSelectedSegmentId(document.segments[0]?.id ?? null);
-      setSelectedTokenId(null);
-      setAnalysisProgress(await getAnalysisProgress(document.id));
-      void refreshLibrary().catch((reason: unknown) => {
-        setError(reason instanceof Error ? reason.message : "刷新学习库失败");
-      });
-      setTitle("");
-      setSourceText("");
-    } catch (reason: unknown) {
-      setError(reason instanceof Error ? reason.message : "保存文章失败");
-    } finally {
-      setIsSaving(false);
-    }
-  }
-
   async function handleSelectDocument(documentId: string): Promise<void> {
     setError(null);
     try {
@@ -192,10 +181,7 @@ export default function App(): ReactElement {
     setSelectedSegmentId(null);
     setSelectedTokenId(null);
     setAnalysisProgress(null);
-    setTitle("");
-    setSourceText("");
-    setContentType("article");
-    setTargetLevel("auto");
+    resetComposer();
   }
 
   async function handleStartAnalysis(): Promise<void> {

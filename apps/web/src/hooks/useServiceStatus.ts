@@ -24,8 +24,8 @@ export interface ServiceStatusController {
 }
 
 export interface UseServiceStatusOptions {
-  /** 健康检查失败时上报（App 统一渲染错误横幅）。 */
-  onError: (message: string) => void;
+  /** 错误上报；传 null 表示清空旧横幅（横幅由 App 统一渲染）。 */
+  onError: (message: string | null) => void;
 }
 
 export function useServiceStatus({ onError }: UseServiceStatusOptions): ServiceStatusController {
