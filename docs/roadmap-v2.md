@@ -63,7 +63,7 @@ M1.5 vitest ──> 为 M1.1 重构提供回归保护（应与 M1.1 同步进行
 | --- | --- | --- | --- | --- |
 | M1.1 | 继续拆分 `App.tsx` 本体（S0 已完成第一轮：1763 → 937 行，8 个模块） | MAINT-002 | L | 把 `App()` 本体的状态逻辑拆为 `useAnalysis` / `useLibrary` / `useSettings` / `useTheme`，组件层保持纯展示 |
 | M1.2 | 段级流式上屏（SSE） | STREAM-001/002/004/005 | L | 服务端事件流 + 前端 `streamAnalysis()` + 逐段合并 |
-| M1.3 | 闭合对象扫描器 | STREAM-002 | M | `json-stream-scanner.ts` + 离线断言 |
+| M1.3 | ✅ 闭合对象扫描器 | STREAM-002 | M | 已完成（2026-09-13）：`json-stream-scanner.ts` —— 零依赖单遍状态机，只切「目标数组内已闭合的对象文本」，不解析不修复；13 条 vitest 用例（含 7 种分片粒度一致性、逐字符推送） |
 | M1.4 | 空闲超时与错误可见 | STREAM-003 | S | 上游空闲阈值 + 先推错误再中止 |
 | M1.5 | ✅ 引入 vitest | MAINT-003 | M | 已完成（2026-09-13）：`apps/api/vitest.config.ts` + `tests/`，`pnpm test` 根/包均可跑；首个测试文件覆盖装箱与估算 14 例。与 verify 的分工见 tech-stack-v2 §七 |
 | M1.6 | 请求指标与终态事件 | OBS-001/002/003/PRIV-004 | M | 本地 JSONL 事件 + `first_segment_ms` / `duration_ms` / `error_category` |
